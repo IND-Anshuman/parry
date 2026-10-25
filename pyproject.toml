@@ -1,0 +1,84 @@
+[build-system]
+requires = ["maturin>=1.9.4,<2"]
+build-backend = "maturin"
+
+[project]
+name = "llm-parry"
+version = "0.1.0"
+description = "Zero-config rate limiting, caching, and cost control for LLM calls."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Anshuman Singh" }]
+requires-python = ">=3.10"
+keywords = ["llm", "openai", "anthropic", "rate-limit", "cache", "cost", "langchain", "llamaindex"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+openai = ["openai>=1.40"]
+anthropic = ["anthropic>=0.40"]
+langchain = ["langchain-core>=0.3"]
+llamaindex = ["llama-index-core>=0.12"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "openai>=1.40",
+    "anthropic>=0.40",
+    "ruff>=0.6",
+]
+integrations = [
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "langchain-anthropic>=0.3",
+    "llama-index-core>=0.12",
+    "llama-index-llms-openai>=0.3",
+]
+
+[project.scripts]
+parry = "parry.__main__:main"
+
+[project.urls]
+Homepage = "https://www.anshumanbuilds.dev/parry/"
+Documentation = "https://www.anshumanbuilds.dev/parry/docs/"
+Repository = "https://github.com/IND-Anshuman/parry.git"
+Source = "https://github.com/IND-Anshuman/parry"
+Issues = "https://github.com/IND-Anshuman/parry/issues"
+Changelog = "https://github.com/IND-Anshuman/parry/blob/main/CHANGELOG.md"
+
+[tool.maturin]
+python-source = "python"
+module-name = "parry._parry_native"
+features = []
+include = [{ path = "LICENSE", format = "sdist" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning:llama_index.*", "ignore::DeprecationWarning:pydantic.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["parry"]

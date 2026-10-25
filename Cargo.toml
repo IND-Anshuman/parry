@@ -1,0 +1,31 @@
+[package]
+name = "parry-native"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Rust core of parry: zero-config rate limiting, caching and cost control for LLM calls"
+license = "MIT"
+repository = "https://github.com/IND-Anshuman/parry"
+homepage = "https://ind-anshuman.github.io/parry/"
+documentation = "https://ind-anshuman.github.io/parry/docs/"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "_parry_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.30", features = ["abi3-py310"] }
+tiktoken-rs = "0.12"
+blake3 = "1.8"
+governor = { version = "0.10", default-features = false, features = ["std", "quanta"] }
+moka = { version = "0.12", features = ["sync"] }
+parking_lot = "0.13"
+serde_json = "1"
+thiserror = "2"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

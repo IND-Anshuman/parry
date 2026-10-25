@@ -1,0 +1,21 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "docs",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": [
+        "run", "--rm", "--name", "parry-docs-dev", "-p", "4390:4390",
+        "-e", "POLL=1", "-e", "ASTRO_TELEMETRY_DISABLED=1",
+        "-v", "C:/Users/knigh/OneDrive/Desktop/parry:/work",
+        "-v", "parry-web-nm:/work/website/node_modules",
+        "-v", "parry-npm:/root/.npm",
+        "-w", "/work/website",
+        "node:22-bookworm-slim",
+        "npx", "astro", "dev", "--host", "0.0.0.0", "--port", "4390"
+      ],
+      "port": 4390,
+      "autoPort": false
+    }
+  ]
+}
