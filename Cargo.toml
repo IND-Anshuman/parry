@@ -6,8 +6,8 @@ rust-version = "1.85"
 description = "Rust core of parry: zero-config rate limiting, caching and cost control for LLM calls"
 license = "MIT"
 repository = "https://github.com/IND-Anshuman/parry"
-homepage = "https://ind-anshuman.github.io/parry/"
-documentation = "https://ind-anshuman.github.io/parry/docs/"
+homepage = "https://www.anshumanbuilds.dev/parry/"
+documentation = "https://www.anshumanbuilds.dev/parry/docs/"
 readme = "README.md"
 publish = false
 

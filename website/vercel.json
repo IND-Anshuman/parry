@@ -1,0 +1,3 @@
+{
+  "rewrites": [{ "source": "/parry/:path*", "destination": "/:path*" }]
+}

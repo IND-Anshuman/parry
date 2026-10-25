@@ -8,7 +8,7 @@ One line to install. No rewrites. Works with OpenAI, Anthropic, LangChain and Ll
 ![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12%20|%203.13%20|%203.14-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-**Documentation: [ind-anshuman.github.io/parry](https://ind-anshuman.github.io/parry/)**
+**Documentation: [www.anshumanbuilds.dev/parry](https://www.anshumanbuilds.dev/parry/)**
 
 Drop parry in front of any OpenAI or Anthropic client and get response caching,
 per-model rate limiting, cost tracking, budget limits and retry with backoff.
@@ -210,7 +210,7 @@ With no active guard, the hook calls the original method directly. See
 
 ## Links
 
-- Documentation: <https://ind-anshuman.github.io/parry/>
+- Documentation: <https://www.anshumanbuilds.dev/parry/>
 - Source: <https://github.com/IND-Anshuman/parry>
 - Issues and pricing updates: <https://github.com/IND-Anshuman/parry/issues>
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
