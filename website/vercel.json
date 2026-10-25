@@ -1,3 +1,7 @@
 {
-  "rewrites": [{ "source": "/parry/:path*", "destination": "/:path*" }]
+  "rewrites": [
+    { "source": "/parry", "destination": "/index.html" },
+    { "source": "/parry/", "destination": "/index.html" },
+    { "source": "/parry/:path+", "destination": "/:path+" }
+  ]
 }
