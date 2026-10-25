@@ -3,14 +3,13 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { remarkBaseLinks } from './src/plugins/remark-base-links.mjs';
 
-// GitHub Pages serves the site from /parry/; Vercel serves it from the domain
-// root. Override with DOCS_SITE / DOCS_BASE for a custom domain
-// (e.g. DOCS_SITE=https://parry.dev DOCS_BASE=/).
-const vercelHost = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+// Vercel serves the site from the domain root at parry.anshumanbuilds.dev;
+// GitHub Pages serves it from /parry/. Override with DOCS_SITE / DOCS_BASE
+// for another host (e.g. DOCS_SITE=https://parry.dev DOCS_BASE=/).
 const onVercel = Boolean(process.env.VERCEL);
 const site =
   process.env.DOCS_SITE ??
-  (onVercel && vercelHost ? `https://${vercelHost}` : 'https://ind-anshuman.github.io');
+  (onVercel ? 'https://parry.anshumanbuilds.dev' : 'https://ind-anshuman.github.io');
 const base = process.env.DOCS_BASE ?? (onVercel ? '/' : '/parry');
 
 export default defineConfig({
