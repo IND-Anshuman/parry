@@ -4,7 +4,7 @@
   "type": "module",
   "version": "0.1.0",
   "description": "Documentation website for parry (llm-parry on PyPI)",
-  "homepage": "https://www.anshumanbuilds.dev/parry/",
+  "homepage": "https://parry.anshumanbuilds.dev/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/IND-Anshuman/parry.git",

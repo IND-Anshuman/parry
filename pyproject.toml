@@ -53,8 +53,8 @@ integrations = [
 parry = "parry.__main__:main"
 
 [project.urls]
-Homepage = "https://www.anshumanbuilds.dev/parry/"
-Documentation = "https://www.anshumanbuilds.dev/parry/docs/"
+Homepage = "https://parry.anshumanbuilds.dev/"
+Documentation = "https://parry.anshumanbuilds.dev/docs/"
 Repository = "https://github.com/IND-Anshuman/parry.git"
 Source = "https://github.com/IND-Anshuman/parry"
 Issues = "https://github.com/IND-Anshuman/parry/issues"
