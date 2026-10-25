@@ -1,0 +1,40 @@
+"""Exceptions raised by parry."""
+
+from __future__ import annotations
+
+
+class ParryError(Exception):
+    """Base class for every error parry raises on its own behalf."""
+
+
+class BudgetExceeded(ParryError):
+    """Raised *before* a request is sent when it would push spend past ``max_cost_usd``."""
+
+    def __init__(
+        self, spent_usd: float, limit_usd: float, estimate_usd: float = 0.0, model: str = ""
+    ):
+        self.spent_usd = spent_usd
+        self.limit_usd = limit_usd
+        self.estimate_usd = estimate_usd
+        self.model = model
+        detail = f" (next call to {model} estimated at ${estimate_usd:.6f})" if model else ""
+        super().__init__(
+            f"parry budget exceeded: spent ${spent_usd:.6f} of ${limit_usd:.6f}{detail}"
+        )
+
+
+class RateLimited(ParryError):
+    """Raised when parry's own rate limiter refuses a request.
+
+    With ``on_rate_limit="wait"`` (the default) this only happens when no slot
+    frees up within ``max_wait`` seconds; with ``on_rate_limit="raise"`` it
+    happens as soon as the bucket is empty.
+    """
+
+    def __init__(self, provider: str, model: str, retry_after: float):
+        self.provider = provider
+        self.model = model
+        self.retry_after = retry_after
+        super().__init__(
+            f"parry rate limit reached for {provider}:{model}; next slot in {retry_after:.3f}s"
+        )
