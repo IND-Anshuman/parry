@@ -1,0 +1,326 @@
+/* ---------------------------------------------------------------------------
+   parry docs theme on top of Starlight
+   --------------------------------------------------------------------------- */
+
+:root {
+  --sl-font: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --sl-font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sl-content-width: 46rem;
+  --sl-text-h1: 2.6rem;
+
+  --parry-violet: #8b7bff;
+  --parry-cyan: #22d3ee;
+  --parry-amber: #fbbf24;
+  --parry-green: #34d399;
+  --parry-red: #fb7185;
+  --parry-gradient: linear-gradient(120deg, #a597ff 0%, #6f8bff 45%, #22d3ee 100%);
+
+  /* Dark theme (default) */
+  --sl-color-accent-low: #1d1a45;
+  --sl-color-accent: #7c6cff;
+  --sl-color-accent-high: #cdc6ff;
+  --sl-color-white: #f5f6fb;
+  --sl-color-gray-1: #e3e5ef;
+  --sl-color-gray-2: #c0c4d6;
+  --sl-color-gray-3: #8b90a8;
+  --sl-color-gray-4: #555a73;
+  --sl-color-gray-5: #2c3046;
+  --sl-color-gray-6: #171a2a;
+  --sl-color-black: #0b0d17;
+
+  --parry-surface: rgba(255, 255, 255, 0.03);
+  --parry-border: rgba(255, 255, 255, 0.09);
+  --parry-glow: rgba(124, 108, 255, 0.18);
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e5e1ff;
+  --sl-color-accent: #5b47f0;
+  --sl-color-accent-high: #2a1f8a;
+  --sl-color-white: #10121c;
+  --sl-color-gray-1: #1e2132;
+  --sl-color-gray-2: #353a52;
+  --sl-color-gray-3: #5b617c;
+  --sl-color-gray-4: #8e94ad;
+  --sl-color-gray-5: #c7cbdb;
+  --sl-color-gray-6: #eceef5;
+  --sl-color-gray-7: #f6f7fb;
+  --sl-color-black: #ffffff;
+
+  --parry-surface: rgba(16, 18, 40, 0.025);
+  --parry-border: rgba(16, 18, 40, 0.1);
+  --parry-glow: rgba(91, 71, 240, 0.12);
+}
+
+/* --- Chrome -------------------------------------------------------------- */
+
+header.header {
+  backdrop-filter: saturate(160%) blur(14px);
+  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  background-color: color-mix(in srgb, var(--sl-color-black) 78%, transparent);
+  border-bottom-color: var(--parry-border);
+}
+
+.site-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  gap: 0.55rem;
+}
+.site-title img {
+  height: 1.7rem;
+  width: auto;
+}
+
+/* Soft glow behind the top of every docs page. */
+.main-frame {
+  background:
+    radial-gradient(60rem 22rem at 70% -6rem, var(--parry-glow), transparent 70%),
+    var(--sl-color-black);
+}
+
+/* Sidebar: pill-shaped active item with a gradient edge. */
+.sidebar-content a[aria-current='page'] {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--sl-color-accent) 26%, transparent), transparent);
+  color: var(--sl-color-white);
+  border-inline-start: 2px solid var(--sl-color-accent);
+  border-radius: 0 0.5rem 0.5rem 0;
+  font-weight: 600;
+}
+.sidebar-content summary .group-label span {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  color: var(--sl-color-gray-3);
+}
+
+/* --- Typography -------------------------------------------------------- */
+
+h1#_top {
+  letter-spacing: -0.035em;
+  font-weight: 750;
+  background: linear-gradient(180deg, var(--sl-color-white) 30%, color-mix(in srgb, var(--sl-color-white) 62%, var(--sl-color-accent)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.sl-markdown-content :is(h2, h3) {
+  letter-spacing: -0.02em;
+}
+.sl-markdown-content h2 {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--parry-border);
+}
+.sl-markdown-content h2:first-child {
+  border-top: none;
+}
+
+.sl-markdown-content :not(pre) > code {
+  border: 1px solid var(--parry-border);
+  border-radius: 0.35rem;
+  padding: 0.08em 0.35em;
+  background: var(--parry-surface);
+  font-size: 0.86em;
+}
+
+.sl-markdown-content table {
+  display: table;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--parry-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  font-size: 0.9rem;
+}
+.sl-markdown-content :is(th, td) {
+  border-bottom: 1px solid var(--parry-border);
+  padding: 0.55rem 0.8rem;
+}
+.sl-markdown-content tr:last-child td {
+  border-bottom: none;
+}
+.sl-markdown-content th {
+  background: var(--parry-surface);
+  font-weight: 600;
+  text-align: start;
+}
+
+/* --- Starlight components -------------------------------------------- */
+
+.card {
+  border-radius: 0.9rem !important;
+  border: 1px solid var(--parry-border) !important;
+  background: var(--parry-surface) !important;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--sl-color-accent) 55%, transparent) !important;
+  box-shadow: 0 10px 30px -12px var(--parry-glow);
+}
+
+.sl-link-card {
+  border-radius: 0.9rem;
+  border-color: var(--parry-border);
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+.sl-link-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--sl-color-accent);
+}
+
+.starlight-aside {
+  border-radius: 0.75rem;
+  border-inline-start-width: 3px;
+}
+
+.expressive-code .frame {
+  box-shadow: 0 12px 32px -18px rgba(0, 0, 0, 0.55);
+}
+
+/* --- Shared widget styles (interactive components) ------------------- */
+
+.pw {
+  --pw-pad: 1.25rem;
+  margin-block: 1.75rem;
+  border: 1px solid var(--parry-border);
+  border-radius: 1rem;
+  background:
+    radial-gradient(40rem 12rem at 0% 0%, color-mix(in srgb, var(--sl-color-accent) 9%, transparent), transparent 70%),
+    var(--parry-surface);
+  padding: var(--pw-pad);
+  position: relative;
+  overflow: hidden;
+}
+.pw-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+  margin: 0 0 1rem !important;
+}
+.pw-title::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 99px;
+  background: var(--parry-gradient);
+  box-shadow: 0 0 12px var(--sl-color-accent);
+}
+.pw-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+}
+.pw label {
+  display: grid;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--sl-color-gray-2);
+  margin: 0 !important;
+}
+.pw :is(input, select, textarea) {
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--sl-color-white);
+  background: var(--sl-color-black);
+  border: 1px solid var(--parry-border);
+  border-radius: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  width: 100%;
+  margin: 0 !important;
+}
+.pw textarea {
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  min-height: 11rem;
+  resize: vertical;
+}
+.pw :is(input, select, textarea):focus {
+  outline: 2px solid color-mix(in srgb, var(--sl-color-accent) 60%, transparent);
+  outline-offset: 1px;
+}
+.pw input[type='range'] {
+  padding: 0;
+  accent-color: var(--sl-color-accent);
+  border: none;
+  background: transparent;
+}
+.pw-btn {
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--parry-gradient);
+  border: none;
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.95rem;
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+.pw-btn:hover {
+  filter: brightness(1.12);
+}
+.pw-btn:active {
+  transform: translateY(1px);
+}
+.pw-btn.ghost {
+  background: transparent;
+  color: var(--sl-color-gray-1);
+  border: 1px solid var(--parry-border);
+}
+.pw-stat {
+  border: 1px solid var(--parry-border);
+  border-radius: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--sl-color-black);
+}
+.pw-stat small {
+  display: block;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+.pw-stat strong {
+  display: block;
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--sl-color-white);
+  margin-top: 0.15rem;
+}
+.pw-stat.good strong {
+  color: var(--parry-green);
+}
+.pw-stat.warn strong {
+  color: var(--parry-amber);
+}
+.pw-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+.pw-note {
+  font-size: 0.8rem;
+  color: var(--sl-color-gray-3);
+  margin-top: 0.75rem !important;
+}
+.pw * + * {
+  margin-top: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .sl-link-card {
+    transition: none;
+  }
+}
