@@ -1,0 +1,23 @@
+name: Pricing update
+description: A model's price in the built-in table is missing or out of date
+labels: [pricing]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Model id
+      placeholder: gpt-4o-mini
+    validations:
+      required: true
+  - type: input
+    id: price
+    attributes:
+      label: Input / output price per million tokens (USD)
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Link to the provider's pricing page
+    validations:
+      required: true

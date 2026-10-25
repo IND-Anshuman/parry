@@ -1,0 +1,117 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+  lint:
+    name: Python lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx ruff check python tests benches examples
+      - run: uvx ruff format --check python tests benches examples
+
+  test:
+    name: Python ${{ matrix.python }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          allow-prereleases: true
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - name: Build and install
+        shell: bash
+        run: |
+          uv venv --python "${{ matrix.python }}" .venv
+          if [ "$RUNNER_OS" = "Windows" ]; then source .venv/Scripts/activate; else source .venv/bin/activate; fi
+          uv pip install maturin
+          uv pip install -e ".[dev,integrations]"
+          python -c "import parry; print(parry.__version__)"
+      - name: Test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then source .venv/Scripts/activate; else source .venv/bin/activate; fi
+          python -m pytest -q
+
+  sdk-compat:
+    # The oldest SDK releases parry supports. A failure here means a hook
+    # target or a response shape changed between SDK versions.
+    name: Pinned older SDKs (openai ${{ matrix.openai }}, anthropic ${{ matrix.anthropic }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { openai: "1.82.0", anthropic: "0.52.0" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - name: Test against pinned SDKs
+        run: |
+          uv venv --python 3.10 .venv && source .venv/bin/activate
+          uv pip install maturin pytest pytest-asyncio "openai==${{ matrix.openai }}" "anthropic==${{ matrix.anthropic }}"
+          uv pip install -e . --no-deps
+          python -m pytest -q --ignore=tests/test_langchain_integration.py --ignore=tests/test_llamaindex_integration.py
+
+  bench:
+    name: Overhead benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v6
+      - name: Run benchmark
+        run: |
+          uv venv --python 3.13 .venv && source .venv/bin/activate
+          uv pip install maturin openai
+          maturin develop --uv --release
+          python benches/overhead_bench.py --n 3000 | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://ind-anshuman.github.io/parry/docs/
+    about: Guides, configuration reference and failure modes. Your answer may already be there.
+  - name: Failure modes and known limitations
+    url: https://ind-anshuman.github.io/parry/docs/reference/failure-modes/
+    about: What parry does when something goes wrong, and what v0.1 does not intercept.
