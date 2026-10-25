@@ -1,0 +1,24 @@
+---
+// Starlight's default footer (pagination, edit link) plus a short project line.
+import Default from '@astrojs/starlight/components/Footer.astro';
+import { GITHUB, url } from '../../data/site';
+---
+
+<Default><slot /></Default>
+<p class="parry-footer">
+  parry is MIT-licensed · <a href={GITHUB}>GitHub</a> ·
+  <a href={url('docs/changelog/')}>Changelog</a> · <a href={url('')}>Home</a>
+</p>
+
+<style>
+  .parry-footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--parry-border);
+    font-size: 0.8rem;
+    color: var(--sl-color-gray-3);
+  }
+  .parry-footer a {
+    color: var(--sl-color-gray-2);
+  }
+</style>

@@ -1,0 +1,134 @@
+---
+// Vertical trace of one call through parry, with a hit/miss toggle.
+const stages = [
+  { id: 'hook', name: 'Hook', where: 'python/parry/_patch.py', text: 'The patched create() finds the active guard. If there is none, it calls the original method directly.' },
+  { id: 'key', name: 'Cache key', where: 'src/cache.rs · src/tokenize.rs', text: 'Semantic kwargs are canonicalised and hashed with blake3, namespaced by provider, endpoint and base URL.' },
+  { id: 'lookup', name: 'Cache lookup', where: 'moka LRU → SQLite (optional)', text: 'A hit is validated back into the SDK type and returned. Nothing else runs.' },
+  { id: 'budget', name: 'Budget pre-check', where: 'src/cost.rs', text: "Spend so far plus the prompt's estimated cost must stay under max_cost_usd." },
+  { id: 'rate', name: 'Rate limit', where: 'src/rate_limit.rs (governor)', text: 'Take a slot from the provider:model bucket, or sleep for exactly as long as the limiter says.' },
+  { id: 'call', name: 'Provider call + retry', where: 'src/retry.rs', text: 'The original SDK method runs. Transient failures back off with jitter and take a fresh rate-limit slot.' },
+  { id: 'record', name: 'Record & store', where: 'ledger + cache', text: 'Usage is priced into the ledger and the response is cached. Streams do this when they finish.' },
+];
+---
+
+<div class="pw parry-flow">
+  <p class="pw-title">Trace a request</p>
+  <div class="pw-row" style="margin:0 0 1rem">
+    <button class="pw-btn" type="button" data-run="miss">Trace a cache miss</button>
+    <button class="pw-btn ghost" type="button" data-run="hit">Trace a cache hit</button>
+  </div>
+  <ol class="pfl">
+    {
+      stages.map((s, i) => (
+        <li data-stage={s.id}>
+          <span class="pfl-n">{i + 1}</span>
+          <div>
+            <b>{s.name}</b> <code>{s.where}</code>
+            <p>{s.text}</p>
+          </div>
+        </li>
+      ))
+    }
+  </ol>
+  <p class="pw-note" data-out aria-live="polite">Pick a scenario to step through it.</p>
+</div>
+
+<style>
+  .pfl {
+    list-style: none;
+    padding: 0 !important;
+    margin: 0 !important;
+    position: relative;
+    display: grid;
+    gap: 0.35rem;
+  }
+  .pfl::before {
+    content: '';
+    position: absolute;
+    left: 0.95rem;
+    top: 0.6rem;
+    bottom: 0.6rem;
+    width: 2px;
+    background: var(--parry-border);
+  }
+  .pfl li {
+    position: relative;
+    display: grid;
+    grid-template-columns: 2rem 1fr;
+    gap: 0.8rem;
+    padding: 0.55rem 0.7rem 0.55rem 0;
+    margin: 0 !important;
+    border-radius: 0.7rem;
+    transition: background 0.3s ease, opacity 0.3s ease;
+  }
+  .pfl-n {
+    position: relative;
+    z-index: 1;
+    width: 1.95rem;
+    height: 1.95rem;
+    border-radius: 0.6rem;
+    display: grid;
+    place-items: center;
+    font-family: var(--sl-font-mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    border: 1px solid var(--parry-border);
+    background: var(--sl-color-black);
+    color: var(--sl-color-gray-2);
+    transition: all 0.3s ease;
+  }
+  .pfl b {
+    font-size: 0.95rem;
+  }
+  .pfl code {
+    font-size: 0.72rem !important;
+    margin-left: 0.35rem;
+  }
+  .pfl p {
+    margin: 0.15rem 0 0 !important;
+    font-size: 0.86rem;
+    color: var(--sl-color-gray-2);
+  }
+  .pfl li.on {
+    background: color-mix(in srgb, var(--sl-color-accent) 9%, transparent);
+  }
+  .pfl li.on .pfl-n {
+    background: var(--parry-gradient);
+    color: #0a0b14;
+    border-color: transparent;
+    box-shadow: 0 0 18px color-mix(in srgb, var(--sl-color-accent) 55%, transparent);
+  }
+  .pfl li.hit .pfl-n {
+    background: var(--parry-green);
+  }
+  .pfl li.skip {
+    opacity: 0.38;
+  }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>('.parry-flow').forEach((root) => {
+    const items = Array.from(root.querySelectorAll<HTMLElement>('li[data-stage]'));
+    const out = root.querySelector<HTMLElement>('[data-out]')!;
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let run = 0;
+    const go = async (kind: string) => {
+      const id = ++run;
+      items.forEach((li) => li.classList.remove('on', 'hit', 'skip'));
+      const path = kind === 'hit' ? ['hook', 'key', 'lookup'] : items.map((li) => li.dataset.stage!);
+      for (const s of path) {
+        if (id !== run) return;
+        const li = items.find((x) => x.dataset.stage === s)!;
+        li.classList.add('on');
+        if (kind === 'hit' && s === 'lookup') li.classList.add('hit');
+        await new Promise((r) => setTimeout(r, reduce ? 0 : 420));
+      }
+      if (kind === 'hit') items.slice(3).forEach((li) => li.classList.add('skip'));
+      out.textContent =
+        kind === 'hit'
+          ? 'Cache hit: 3 stages, about 10 µs. No budget check, no rate-limit slot, no network, $0.'
+          : 'Cache miss: all 7 stages. parry adds about 65 µs on top of the SDK call itself.';
+    };
+    root.querySelectorAll<HTMLButtonElement>('[data-run]').forEach((b) => b.addEventListener('click', () => go(b.dataset.run!)));
+  });
+</script>

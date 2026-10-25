@@ -1,0 +1,151 @@
+---
+// Shows whether two requests share a parry cache entry. The canonicalisation
+// below mirrors python/parry/_adapters.py (NON_SEMANTIC_KEYS) and
+// src/tokenize.rs (sorted keys, trimmed strings, CRLF -> LF).
+const presets = {
+  user: {
+    label: 'Different user (hit)',
+    a: { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Summarise this ticket' }], user: 'alice' },
+    b: { model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'Summarise this ticket' }], user: 'bob', timeout: 30 },
+  },
+  ws: {
+    label: 'Extra whitespace (hit)',
+    a: { model: 'gpt-4o', messages: [{ role: 'user', content: 'Hello' }], temperature: 0 },
+    b: { temperature: 0, messages: [{ content: '  Hello\n', role: 'user' }], model: 'gpt-4o' },
+  },
+  temp: {
+    label: 'Different temperature (miss)',
+    a: { model: 'gpt-4o', messages: [{ role: 'user', content: 'Name a colour' }], temperature: 0 },
+    b: { model: 'gpt-4o', messages: [{ role: 'user', content: 'Name a colour' }], temperature: 1 },
+  },
+  system: {
+    label: 'Different system prompt (miss)',
+    a: { model: 'claude-opus-5-5', max_tokens: 512, system: 'Be terse.', messages: [{ role: 'user', content: 'Explain GCRA' }] },
+    b: { model: 'claude-opus-5-5', max_tokens: 512, system: 'Be thorough.', messages: [{ role: 'user', content: 'Explain GCRA' }] },
+  },
+  format: {
+    label: 'response_format (miss)',
+    a: { model: 'gpt-4o', messages: [{ role: 'user', content: 'List 3 fruits' }] },
+    b: { model: 'gpt-4o', messages: [{ role: 'user', content: 'List 3 fruits' }], response_format: { type: 'json_object' } },
+  },
+};
+const first = presets.user;
+---
+
+<div class="pw parry-key" data-presets={JSON.stringify(presets)}>
+  <p class="pw-title">Will this hit the cache?</p>
+  <div class="pw-row" style="margin:0 0 1rem">
+    {Object.entries(presets).map(([id, p]) => <button class="pw-btn ghost" type="button" data-preset={id}>{p.label}</button>)}
+  </div>
+  <div class="pw-grid" style="grid-template-columns:repeat(auto-fit,minmax(16rem,1fr))">
+    <label>Request A (kwargs to create())<textarea data-a spellcheck="false">{JSON.stringify(first.a, null, 2)}</textarea></label>
+    <label>Request B<textarea data-b spellcheck="false">{JSON.stringify(first.b, null, 2)}</textarea></label>
+  </div>
+  <div class="pkey-verdict" data-verdict aria-live="polite"></div>
+  <p class="pw-note" data-detail></p>
+</div>
+
+<style is:global>
+  .pkey-verdict {
+    margin-top: 1rem;
+    border-radius: 0.75rem;
+    padding: 0.8rem 1rem;
+    font-weight: 650;
+    border: 1px solid var(--parry-border);
+    background: var(--sl-color-black);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .pkey-verdict b {
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    border-radius: 0.35rem;
+    padding: 0.12rem 0.45rem;
+    color: #0a0b14;
+  }
+  .pkey-verdict.hit b {
+    background: var(--parry-green);
+  }
+  .pkey-verdict.miss b {
+    background: var(--parry-amber);
+  }
+  .pkey-verdict.err b {
+    background: var(--parry-red);
+  }
+</style>
+
+<script>
+  const NON_SEMANTIC = new Set([
+    'stream', 'stream_options', 'timeout', 'extra_headers', 'extra_query', 'extra_body', 'user', 'metadata',
+    'store', 'service_tier', 'safety_identifier', 'prompt_cache_key', 'prompt_cache_retention', 'background', 'betas',
+  ]);
+
+  const canon = (v: unknown): unknown => {
+    if (typeof v === 'string') return v.trim().replace(/\r\n/g, '\n');
+    if (Array.isArray(v)) return v.map(canon);
+    if (v && typeof v === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(v as object).sort()) out[k] = canon((v as Record<string, unknown>)[k]);
+      return out;
+    }
+    return v;
+  };
+
+  const semantic = (req: Record<string, unknown>) => {
+    const kept: Record<string, unknown> = {};
+    const dropped: string[] = [];
+    for (const [k, v] of Object.entries(req)) {
+      if (NON_SEMANTIC.has(k) || v === null) dropped.push(k);
+      else kept[k] = v;
+    }
+    return { kept: canon(kept) as Record<string, unknown>, dropped };
+  };
+
+  document.querySelectorAll<HTMLElement>('.parry-key').forEach((root) => {
+    const presets = JSON.parse(root.dataset.presets ?? '{}');
+    const a = root.querySelector<HTMLTextAreaElement>('[data-a]')!;
+    const b = root.querySelector<HTMLTextAreaElement>('[data-b]')!;
+    const verdict = root.querySelector<HTMLElement>('[data-verdict]')!;
+    const detail = root.querySelector<HTMLElement>('[data-detail]')!;
+
+    const update = () => {
+      let ra: Record<string, unknown>;
+      let rb: Record<string, unknown>;
+      try {
+        ra = JSON.parse(a.value);
+        rb = JSON.parse(b.value);
+      } catch (e) {
+        verdict.className = 'pkey-verdict err';
+        verdict.innerHTML = '<b>JSON</b> One of the requests is not valid JSON.';
+        detail.textContent = '';
+        return;
+      }
+      const sa = semantic(ra);
+      const sb = semantic(rb);
+      const same = JSON.stringify(sa.kept) === JSON.stringify(sb.kept);
+      const keys = new Set([...Object.keys(sa.kept), ...Object.keys(sb.kept)]);
+      const differ = [...keys].filter((k) => JSON.stringify(sa.kept[k]) !== JSON.stringify(sb.kept[k]));
+      const dropped = [...new Set([...sa.dropped, ...sb.dropped])];
+      verdict.className = `pkey-verdict ${same ? 'hit' : 'miss'}`;
+      verdict.innerHTML = same
+        ? '<b>HIT</b> Same cache key. Request B would be answered from cache.'
+        : `<b>MISS</b> Different keys. These fields change the answer: ${differ.map((k) => `<code>${k}</code>`).join(', ')}`;
+      detail.innerHTML =
+        (dropped.length ? `Ignored (non-semantic): ${dropped.map((k) => `<code>${k}</code>`).join(', ')}. ` : '') +
+        'Keys are sorted and strings trimmed before hashing. The client base URL is part of the key too.';
+    };
+
+    root.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        const p = presets[btn.dataset.preset ?? ''];
+        a.value = JSON.stringify(p.a, null, 2);
+        b.value = JSON.stringify(p.b, null, 2);
+        update();
+      }),
+    );
+    a.addEventListener('input', update);
+    b.addEventListener('input', update);
+    update();
+  });
+</script>

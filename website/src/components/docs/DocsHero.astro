@@ -1,0 +1,117 @@
+---
+// Intro banner for the docs home: gradient title, install pill, two actions.
+import { PYPI_NAME, url } from '../../data/site';
+---
+
+<div class="pdh">
+  <div class="pdh-glow" aria-hidden="true"></div>
+  <p class="pdh-kicker">parry docs</p>
+  <p class="pdh-title">Guard rails for every <span>LLM call</span></p>
+  <p class="pdh-tag">
+    Caching, per-model rate limits, cost tracking, hard budgets and retries for the OpenAI and
+    Anthropic SDKs, with one line and no rewrites.
+  </p>
+  <div class="pdh-row">
+    <code class="pdh-pill"><span>$</span> pip install {PYPI_NAME}</code>
+    <a class="pdh-btn primary" href={url('docs/quickstart/')}>Quickstart →</a>
+    <a class="pdh-btn" href={url('docs/how-it-works/')}>How it works</a>
+  </div>
+</div>
+
+<style>
+  .pdh {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--parry-border);
+    border-radius: 1.2rem;
+    padding: 2rem 1.8rem 1.8rem;
+    margin-bottom: 2rem;
+    background:
+      linear-gradient(var(--parry-border) 1px, transparent 1px) 0 0 / 32px 32px,
+      linear-gradient(90deg, var(--parry-border) 1px, transparent 1px) 0 0 / 32px 32px,
+      var(--sl-color-black);
+  }
+  .pdh-glow {
+    position: absolute;
+    inset: -40% -10% auto 30%;
+    height: 22rem;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--sl-color-accent) 40%, transparent), transparent);
+    filter: blur(30px);
+    animation: pdh-float 14s ease-in-out infinite alternate;
+    pointer-events: none;
+  }
+  @keyframes pdh-float {
+    to {
+      transform: translate3d(-12%, 18%, 0) scale(1.15);
+    }
+  }
+  .pdh > :not(.pdh-glow) {
+    position: relative;
+  }
+  .pdh-kicker {
+    font-family: var(--sl-font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--parry-cyan);
+    margin: 0 !important;
+  }
+  .pdh-title {
+    font-size: clamp(1.9rem, 4vw, 2.7rem);
+    line-height: 1.08;
+    letter-spacing: -0.04em;
+    font-weight: 780;
+    color: var(--sl-color-white);
+    margin: 0.5rem 0 0.7rem !important;
+  }
+  .pdh-title span {
+    background: var(--parry-gradient);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .pdh-tag {
+    color: var(--sl-color-gray-2);
+    max-width: 36rem;
+    margin: 0 !important;
+  }
+  .pdh-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+    margin-top: 1.3rem !important;
+  }
+  .pdh-pill {
+    font-size: 0.85rem !important;
+    padding: 0.5rem 0.8rem !important;
+    border-radius: 0.6rem !important;
+  }
+  .pdh-pill span {
+    color: var(--sl-color-gray-3);
+  }
+  .pdh-btn {
+    font-size: 0.88rem;
+    font-weight: 600;
+    text-decoration: none;
+    padding: 0.5rem 0.95rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--parry-border);
+    color: var(--sl-color-white);
+    margin: 0 !important;
+  }
+  .pdh-btn.primary {
+    border: none;
+    color: #0a0b14;
+    background: var(--parry-gradient);
+    box-shadow: 0 8px 24px -10px var(--sl-color-accent);
+  }
+  .pdh-btn:hover {
+    filter: brightness(1.1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pdh-glow {
+      animation: none;
+    }
+  }
+</style>

@@ -1,0 +1,86 @@
+---
+// Interactive cost estimator fed by the real pricing table in src/cost.rs.
+import { pricing } from '../../data/site';
+
+interface Props {
+  model?: string;
+}
+const { model = 'gpt-4o-mini' } = Astro.props;
+const openai = pricing.rows.filter((r) => r.provider === 'openai');
+const anthropic = pricing.rows.filter((r) => r.provider === 'anthropic');
+---
+
+<div class="pw parry-cost" data-rows={JSON.stringify(pricing.rows)}>
+  <p class="pw-title">Cost calculator · prices verified {pricing.verified}</p>
+  <div class="pw-grid">
+    <label>
+      Model
+      <select data-f="model">
+        <optgroup label="OpenAI">
+          {openai.map((r) => <option value={r.model} selected={r.model === model}>{r.model}</option>)}
+        </optgroup>
+        <optgroup label="Anthropic">
+          {anthropic.map((r) => <option value={r.model} selected={r.model === model}>{r.model}</option>)}
+        </optgroup>
+      </select>
+    </label>
+    <label>Input tokens / call<input data-f="in" type="number" min="0" step="100" value="1200" /></label>
+    <label>Output tokens / call<input data-f="out" type="number" min="0" step="50" value="300" /></label>
+    <label>Calls / day<input data-f="calls" type="number" min="0" step="100" value="5000" /></label>
+  </div>
+  <label style="margin-top:1rem !important">
+    <span>Cache hit rate: <b data-o="rate">30%</b></span>
+    <input data-f="hit" type="range" min="0" max="95" step="5" value="30" />
+  </label>
+  <div class="pw-grid" style="margin-top:1rem">
+    <div class="pw-stat"><small>Per call</small><strong data-o="call">–</strong></div>
+    <div class="pw-stat"><small>Per month, no cache</small><strong data-o="raw">–</strong></div>
+    <div class="pw-stat warn"><small>Per month with parry</small><strong data-o="net">–</strong></div>
+    <div class="pw-stat good"><small>Saved / month</small><strong data-o="saved">–</strong></div>
+  </div>
+  <p class="pw-note" data-o="note"></p>
+</div>
+
+<script>
+  type Row = {
+    model: string;
+    input: number;
+    output: number;
+    longThreshold?: number;
+    longInput?: number;
+    longOutput?: number;
+  };
+  const money = (v: number) =>
+    v >= 100 ? `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(v >= 0.01 ? 4 : 6)}`;
+
+  document.querySelectorAll<HTMLElement>('.parry-cost').forEach((root) => {
+    const rows: Row[] = JSON.parse(root.dataset.rows ?? '[]');
+    const f = (k: string) => root.querySelector<HTMLInputElement & HTMLSelectElement>(`[data-f="${k}"]`)!;
+    const o = (k: string) => root.querySelector<HTMLElement>(`[data-o="${k}"]`)!;
+    const update = () => {
+      const row = rows.find((r) => r.model === f('model').value);
+      if (!row) return;
+      const inTok = Math.max(0, Number(f('in').value) || 0);
+      const outTok = Math.max(0, Number(f('out').value) || 0);
+      const calls = Math.max(0, Number(f('calls').value) || 0);
+      const hit = Number(f('hit').value) / 100;
+      const long = row.longThreshold !== undefined && inTok > row.longThreshold;
+      const pIn = long ? row.longInput! : row.input;
+      const pOut = long ? row.longOutput! : row.output;
+      const perCall = (inTok * pIn + outTok * pOut) / 1e6;
+      const raw = perCall * calls * 30;
+      const net = raw * (1 - hit);
+      o('rate').textContent = `${Math.round(hit * 100)}%`;
+      o('call').textContent = money(perCall);
+      o('raw').textContent = money(raw);
+      o('net').textContent = money(net);
+      o('saved').textContent = money(raw - net);
+      o('note').textContent =
+        `${row.model}: $${pIn.toFixed(2)} / $${pOut.toFixed(2)} per million input / output tokens` +
+        (long ? ` (long-context rate above ${row.longThreshold!.toLocaleString()} input tokens)` : '') +
+        '. Cache hits cost nothing and use no rate-limit capacity.';
+    };
+    root.addEventListener('input', update);
+    update();
+  });
+</script>

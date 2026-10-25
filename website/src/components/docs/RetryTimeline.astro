@@ -1,0 +1,118 @@
+---
+// Visualises parry's retry schedule: delay = min(max, base * 2^(n-1)), with
+// "equal jitter" (half fixed, half random), or Retry-After when the server sends it.
+---
+
+<div class="pw parry-retry">
+  <p class="pw-title">Retry schedule</p>
+  <div class="pw-grid">
+    <label>max_attempts<input data-f="attempts" type="number" min="1" max="8" value="4" /></label>
+    <label>retry_base_delay (s)<input data-f="base" type="number" min="0" step="0.1" value="0.5" /></label>
+    <label>retry_max_delay (s)<input data-f="max" type="number" min="0" step="1" value="30" /></label>
+    <label>Retry-After header (s)<input data-f="ra" type="number" min="0" step="0.5" placeholder="none" /></label>
+  </div>
+  <div class="pw-row">
+    <label style="display:flex;gap:.5rem;align-items:center"><input data-f="jitter" type="checkbox" checked style="width:auto" /> jitter</label>
+    <button class="pw-btn ghost" type="button" data-roll>Re-roll jitter</button>
+  </div>
+  <div class="prt-track" data-track></div>
+  <p class="pw-note" data-summary></p>
+</div>
+
+<style is:global>
+  .prt-track {
+    position: relative;
+    margin-top: 1.4rem;
+    height: 5.2rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--parry-border);
+    background:
+      repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), var(--parry-border) calc(10% - 1px) 10%),
+      var(--sl-color-black);
+  }
+  .prt-mark {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    transition: left 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .prt-mark i {
+    width: 1.1rem;
+    height: 1.1rem;
+    border-radius: 50%;
+    background: var(--parry-red);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--parry-red) 60%, transparent);
+  }
+  .prt-mark.up span {
+    top: auto;
+    bottom: 1.35rem;
+  }
+  .prt-mark i {
+    display: block;
+  }
+  .prt-mark.last i {
+    background: var(--parry-green);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--parry-green) 60%, transparent);
+  }
+  .prt-mark span {
+    position: absolute;
+    left: 50%;
+    top: 1.35rem;
+    transform: translateX(-50%);
+    font-family: var(--sl-font-mono);
+    font-size: 0.68rem;
+    color: var(--sl-color-gray-2);
+    white-space: nowrap;
+  }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>('.parry-retry').forEach((root) => {
+    const f = (k: string) => root.querySelector<HTMLInputElement>(`[data-f="${k}"]`)!;
+    const track = root.querySelector<HTMLElement>('[data-track]')!;
+    const summary = root.querySelector<HTMLElement>('[data-summary]')!;
+    let seeds: number[] = Array.from({ length: 8 }, Math.random);
+
+    const render = () => {
+      const attempts = Math.min(8, Math.max(1, Number(f('attempts').value) || 1));
+      const base = Math.max(0, Number(f('base').value) || 0);
+      const max = Math.max(0, Number(f('max').value) || 0);
+      const raRaw = f('ra').value;
+      const ra = raRaw === '' ? null : Math.max(0, Number(raRaw));
+      const jitter = f('jitter').checked;
+      const delays: number[] = [];
+      for (let n = 1; n < attempts; n++) {
+        if (ra !== null) {
+          delays.push(Math.min(ra, max));
+          continue;
+        }
+        const raw = Math.min(max, base * 2 ** (n - 1));
+        delays.push(jitter ? raw / 2 + seeds[n] * (raw / 2) : raw);
+      }
+      const times = [0];
+      delays.forEach((d) => times.push(times[times.length - 1] + d));
+      const total = times[times.length - 1] || 1;
+      track.innerHTML = '';
+      times.forEach((t, i) => {
+        const m = document.createElement('div');
+        m.className = `prt-mark${i === times.length - 1 ? ' last' : ''}${i % 2 ? ' up' : ''}`;
+        m.style.left = `${4 + (t / total) * 92}%`;
+        m.innerHTML = `<i></i><span>#${i + 1} · ${t.toFixed(2)}s</span>`;
+        track.appendChild(m);
+      });
+      summary.textContent =
+        attempts === 1
+          ? 'One attempt: no retries.'
+          : `${attempts} attempts over ${total.toFixed(2)} s. Delays: ${delays.map((d) => d.toFixed(2) + 's').join(' → ')}.` +
+            (ra !== null ? ' The server Retry-After value wins (capped at retry_max_delay).' : '') +
+            ' 400 / 401 / 403 / 404 / 422 are never retried.';
+    };
+
+    root.addEventListener('input', render);
+    root.querySelector('[data-roll]')?.addEventListener('click', () => {
+      seeds = Array.from({ length: 8 }, Math.random);
+      render();
+    });
+    render();
+  });
+</script>

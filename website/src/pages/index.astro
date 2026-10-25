@@ -1,0 +1,662 @@
+---
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
+import '../styles/landing.css';
+import { Code } from 'astro:components';
+import logo from '../assets/logo.svg?url';
+import { GITHUB, PYPI_NAME, VERSION, bench, url } from '../data/site';
+
+const title = 'parry: zero-config guard rails for LLM calls';
+const description =
+  'Drop parry in front of any OpenAI or Anthropic client and get caching, per-model rate limiting, cost tracking, budgets and retries. One line, no rewrites.';
+
+const heroCode = `import openai
+import parry
+
+parry.install()          # the only line you add
+
+client = openai.OpenAI()
+answer = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Hi!"}],
+)
+print(parry.stats().summary())`;
+
+const hl = (lineNo: number) => ({
+  name: 'highlight-line',
+  line(node: any, line: number) {
+    if (line === lineNo) this.addClassToHast(node, 'hl');
+  },
+});
+
+const beforeCode = `cache, spend = {}, 0.0
+bucket = TokenBucket(rate=500 / 60)
+
+def ask(msgs, model="gpt-4o"):
+    global spend
+    key = sha256(dumps([model, msgs]))
+    if key in cache:
+        return cache[key]
+    if spend > BUDGET:
+        raise RuntimeError("over budget")
+    for attempt in range(5):
+        time.sleep(bucket.wait_time())
+        try:
+            r = client.chat.completions.create(
+                model=model, messages=msgs)
+            break
+        except (RateLimitError, APITimeoutError):
+            time.sleep(2 ** attempt + random())
+    u, p = r.usage, PRICES[model]
+    spend += (u.prompt_tokens * p[0]
+              + u.completion_tokens * p[1]) / 1e6
+    cache[key] = r
+    return r
+
+# ...again for async, streaming, Anthropic`;
+
+const afterCode = `import parry
+
+parry.install(max_cost_usd=10)
+
+r = client.chat.completions.create(
+    model="gpt-4o", messages=msgs)`;
+
+const step1 = `pip install ${PYPI_NAME}`;
+const step2 = `import parry
+parry.install()`;
+const step3 = `print(parry.stats().summary())
+# cache  2 hits / 1 misses (67%)
+# spend  $0.000006 this session`;
+
+const overhead = Math.round(bench.miss - bench.baseline);
+const maxBar = Math.max(bench.miss, bench.baseline);
+const pct = (v: number) => `${Math.max(1.5, (v / maxBar) * 100).toFixed(1)}%`;
+
+const icons = {
+  cache: '<path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Z"/><path d="M4 7v5c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5"/>',
+  gauge: '<path d="M12 14l4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/>',
+  coins: '<circle cx="8" cy="8" r="5"/><path d="M18.1 10.4A5 5 0 1 1 11.6 17"/><path d="M8 6v4"/>',
+  shield: '<path d="M12 3 4 6v6c0 5 3.4 8.4 8 9 4.6-.6 8-4 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 15.5-6.3L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.3L3 16"/><path d="M3 21v-5h5"/>',
+  wave: '<path d="M2 12h3l3-8 4 16 3-8h7"/>',
+  code: '<path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/>',
+  cloud: '<path d="M17.5 19a4.5 4.5 0 1 0-1.4-8.8A6 6 0 0 0 4.5 12 3.5 3.5 0 0 0 6 19Z"/>',
+  ledger: '<path d="M4 4h12l4 4v12H4Z"/><path d="M8 12h8M8 16h5M8 8h4"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/>',
+  check: '<path d="m5 12 5 5 9-10"/>',
+  github:
+    '<path fill="currentColor" stroke="none" d="M12 .5a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A11.5 11.5 0 0 0 12 .5Z"/>',
+  arrow: '<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>',
+};
+const svg = (name: keyof typeof icons) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
+
+const features = [
+  {
+    icon: 'cache',
+    title: 'Response caching',
+    text: 'Identical requests come back from a bounded LRU in about 10 µs. The key covers every field that changes the answer, plus the base URL.',
+    chip: 'cache_ttl=3600',
+    href: 'docs/features/caching/',
+  },
+  {
+    icon: 'gauge',
+    title: 'Per-model rate limits',
+    text: 'One token bucket per provider and model, with defaults set to the published tier-1 limits. parry waits for a slot instead of collecting 429s.',
+    chip: 'set_rate_limit("gpt-4o", 60)',
+    href: 'docs/features/rate-limiting/',
+  },
+  {
+    icon: 'coins',
+    title: 'Cost tracking',
+    text: 'Exact token usage priced from a dated table and broken down by model. Add SQLite for daily and lifetime totals.',
+    chip: 'stats.total_cost_usd',
+    href: 'docs/features/cost-tracking/',
+  },
+  {
+    icon: 'shield',
+    title: 'Hard budgets',
+    text: 'A request that would push spend past the limit raises BudgetExceeded before it leaves your process. Cached answers stay free.',
+    chip: 'max_cost_usd=10',
+    href: 'docs/features/budgets/',
+  },
+  {
+    icon: 'refresh',
+    title: 'Retries that behave',
+    text: 'Exponential backoff with jitter. Honours Retry-After, retries 429, 5xx and timeouts, and never retries a 401.',
+    chip: 'max_attempts=3',
+    href: 'docs/features/retries/',
+  },
+  {
+    icon: 'wave',
+    title: 'Streaming & async',
+    text: 'Streams reach you untouched and are metered as they flow. A finished stream fills the cache for the next call.',
+    chip: 'stream=True',
+    href: 'docs/features/streaming/',
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#07080f" />
+    <link rel="icon" href={url('favicon.svg')} type="image/svg+xml" />
+    <script is:inline>document.documentElement.classList.add('js');</script>
+  </head>
+  <body>
+    <div class="aurora" aria-hidden="true"><span></span><span></span><span></span></div>
+
+    <header class="nav" id="nav">
+      <div class="wrap nav-inner">
+        <a class="brand" href={url('')}><img src={logo} alt="" />parry</a>
+        <nav class="nav-links" aria-label="Sections">
+          <a href="#why">Why parry</a>
+          <a href="#how">How it works</a>
+          <a href="#features">Features</a>
+          <a href="#benchmarks">Benchmarks</a>
+          <a href={url('docs/')}>Docs</a>
+        </nav>
+        <div class="nav-cta">
+          <a class="btn sm" href={GITHUB}><Fragment set:html={svg('github')} />GitHub</a>
+          <a class="btn sm primary" href={url('docs/quickstart/')}>Get started</a>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <!-- Hero ------------------------------------------------------------- -->
+      <section class="hero">
+        <div class="gridlines" aria-hidden="true"></div>
+        <div class="wrap hero-grid">
+          <div>
+            <a class="eyebrow" href={url('docs/changelog/')} data-reveal>
+              <b>v{VERSION}</b> Rust core · Python API · MIT
+            </a>
+            <h1 class="headline" data-reveal style="--d:.05s">
+              Guard every<br />LLM call with<br /><span class="grad">one line.</span>
+            </h1>
+            <span class="rotator" data-reveal style="--d:.1s">
+              Your OpenAI and Anthropic calls, <span class="word" id="rot">cached</span>
+            </span>
+            <p class="lede" data-reveal style="--d:.15s">
+              parry puts caching, per-model rate limits, cost tracking, budgets and retries in front of
+              the SDKs you already use. There's nothing to configure and no call site to rewrite.
+            </p>
+            <div data-reveal style="--d:.2s">
+              <div class="install">
+                <span><span class="prompt">$ </span>pip install {PYPI_NAME}</span>
+                <button class="copy" data-copy={`pip install ${PYPI_NAME}`} aria-label="Copy install command">
+                  <span class="clip"><Fragment set:html={svg('copy')} /></span>
+                  <span class="ok"><Fragment set:html={svg('check')} /></span>
+                </button>
+              </div>
+            </div>
+            <div class="hero-ctas" data-reveal style="--d:.25s">
+              <a class="btn primary" href={url('docs/quickstart/')}>Read the quickstart <Fragment set:html={svg('arrow')} /></a>
+              <a class="btn" href={url('docs/how-it-works/')}>How it works</a>
+            </div>
+            <div class="hero-meta" data-reveal style="--d:.3s">
+              <span>Sync &amp; async</span><span>Streaming</span><span>LangChain &amp; LlamaIndex</span>
+            </div>
+          </div>
+
+          <div class="stack" data-reveal style="--d:.15s">
+            <div class="win">
+              <div class="win-bar"><i></i><i></i><i></i><span class="name">app.py</span><span class="tag">python</span></div>
+              <Code code={heroCode} lang="python" theme="github-dark-default" transformers={[hl(4)]} />
+            </div>
+            <div class="win">
+              <div class="win-bar">
+                <i></i><i></i><i></i><span class="name">terminal</span>
+                <button class="replay" id="replay" type="button">↻ replay</button>
+              </div>
+              <div class="term" id="term" aria-label="Example output" role="img">
+                <div class="ln"><span class="p">$</span> python app.py</div>
+                <div class="ln" data-wait="900">call 1  <span class="ms-slow">612.4 ms</span><span class="miss">MISS</span>  'A token bucket refills…'</div>
+                <div class="ln" data-wait="450">call 2  <span class="ms-fast">  0.4 ms</span><span class="hit">HIT</span>   no network, $0</div>
+                <div class="ln" data-wait="300">call 3  <span class="ms-fast">  0.1 ms</span><span class="hit">HIT</span>   no network, $0</div>
+                <div class="ln" data-wait="350"> </div>
+                <div class="ln" data-wait="120"><span class="k">requests      </span><span class="v">3</span></div>
+                <div class="ln" data-wait="120"><span class="k">cache         </span><span class="v">2 hits / 1 miss (67%)</span></div>
+                <div class="ln" data-wait="120"><span class="k">spend         </span><span class="v">$0.000006 this session</span></div>
+                <div class="ln" data-wait="120"><span class="k">rate limiting </span><span class="v">0 delayed · 0 rejected</span></div>
+                <div class="ln" data-wait="200"><span class="p">$</span> <span class="cursor"></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="strip">
+        <div class="wrap strip-inner">
+          <span class="strip-label">Works with the stack you already have</span>
+          <strong>OpenAI</strong><strong>Anthropic</strong><strong>LangChain</strong><strong>LlamaIndex</strong>
+          <span>sync · async · streaming · raw responses · Responses API</span>
+        </div>
+      </div>
+
+      <!-- Why / aim -------------------------------------------------------- -->
+      <section id="why">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="kicker">The problem</span>
+            <h2 class="title">LLM apps fail in boring,<br /><span class="grad">expensive</span> ways.</h2>
+            <p class="sub">
+              None of these are hard problems on their own. Together they turn into the same glue code
+              copied into every project, and it usually gets skipped until something breaks.
+            </p>
+          </div>
+          <div class="pains">
+            <article class="pain" data-reveal style="--d:.05s">
+              <span class="num">01</span>
+              <h3>Paying twice for the same answer</h3>
+              <p>Re-running a notebook, an eval or a retry loop sends the identical prompt again, and you pay again.</p>
+              <div class="fix">Identical requests are answered from cache, for free.</div>
+            </article>
+            <article class="pain" data-reveal style="--d:.12s">
+              <span class="num">02</span>
+              <h3>429 storms</h3>
+              <p>Batch jobs hit the provider's limit, everything fails at once, and naive retries make it worse.</p>
+              <div class="fix">Token buckets space requests out before the provider says no.</div>
+            </article>
+            <article class="pain" data-reveal style="--d:.19s">
+              <span class="num">03</span>
+              <h3>Surprise invoices</h3>
+              <p>An agent loops, a prompt grows, and you find out at the end of the month.</p>
+              <div class="fix">Live spend by model, and a hard stop at your budget.</div>
+            </article>
+          </div>
+          <div class="aim" data-reveal>
+            <span class="badge">The aim</span>
+            <p>
+              Make the safe path the default path. <em>No config files, no external services, no new SDK to learn.
+              Add one line, and remove it when you no longer need it.</em>
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Pipeline --------------------------------------------------------- -->
+      <section id="how">
+        <div class="wrap">
+          <div class="center" data-reveal>
+            <span class="kicker">How it works</span>
+            <h2 class="title">Six steps, every call,<br />in microseconds.</h2>
+            <p class="sub">
+              <code>parry.install()</code> hooks the SDK's own <code>create()</code> methods, so every
+              client in the process is covered, including the ones LangChain and LlamaIndex create for you.
+            </p>
+          </div>
+          <div class="pipe" data-reveal>
+            <div class="pipe-track" id="pipe">
+              <div class="node" data-step="code"><div class="dot" set:html={svg('code')} /><b>Your code</b><small>calls create() as usual</small></div>
+              <div class="node" data-step="cache"><div class="dot" set:html={svg('cache')} /><b>Cache</b><small>blake3 key, LRU + TTL</small></div>
+              <div class="node" data-step="budget"><div class="dot" set:html={svg('shield')} /><b>Budget</b><small>pre-flight cost check</small></div>
+              <div class="node" data-step="rate"><div class="dot" set:html={svg('gauge')} /><b>Rate limit</b><small>token bucket per model</small></div>
+              <div class="node" data-step="sdk"><div class="dot" set:html={svg('cloud')} /><b>Provider</b><small>original SDK call, with retry</small></div>
+              <div class="node" data-step="ledger"><div class="dot" set:html={svg('ledger')} /><b>Ledger</b><small>record cost, fill cache</small></div>
+            </div>
+            <div class="pipe-foot">
+              <div class="pipe-log" id="pipelog" aria-live="polite">Waiting for a request…</div>
+              <div class="seg" role="group" aria-label="Scenario">
+                <button type="button" data-mode="auto" aria-pressed="true">Auto</button>
+                <button type="button" data-mode="miss" aria-pressed="false">Cache miss</button>
+                <button type="button" data-mode="hit" aria-pressed="false">Cache hit</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Features --------------------------------------------------------- -->
+      <section id="features">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="kicker">What you get for free</span>
+            <h2 class="title">Production guard rails,<br />no configuration.</h2>
+            <p class="sub">Every feature is on by default and has defaults that suit most apps. You can tune any of them when you need to.</p>
+          </div>
+          <div class="features">
+            {
+              features.map((f, i) => (
+                <article class="spot" data-reveal style={`--d:${(i % 3) * 0.07}s`}>
+                  <div class="ico" set:html={svg(f.icon as keyof typeof icons)} />
+                  <h3>{f.title}</h3>
+                  <p>{f.text}</p>
+                  <code class="chip">{f.chip}</code>
+                  <a class="more" href={url(f.href)}>Learn more →</a>
+                </article>
+              ))
+            }
+          </div>
+        </div>
+      </section>
+
+      <!-- Before / after --------------------------------------------------- -->
+      <section>
+        <div class="wrap">
+          <div data-reveal>
+            <span class="kicker">Before / after</span>
+            <h2 class="title">Delete the glue code.</h2>
+            <p class="sub">
+              The homemade version covers one client, one model and one code path. parry covers every
+              client, every model and every code path, including async, streaming and framework calls.
+            </p>
+          </div>
+          <div class="compare">
+            <div class="win" data-reveal>
+              <div class="win-bar"><i></i><i></i><i></i><span class="name">before.py</span><span class="tag bad">25 lines · 1 code path</span></div>
+              <Code code={beforeCode} lang="python" theme="github-dark-default" />
+            </div>
+            <div class="win after" data-reveal style="--d:.1s">
+              <div class="win-bar"><i></i><i></i><i></i><span class="name">after.py</span><span class="tag good">2 lines · every code path</span></div>
+              <Code code={afterCode} lang="python" theme="github-dark-default" transformers={[hl(3)]} />
+              <div class="after-note">
+                <span>Cache with TTL and size bound</span>
+                <span>Per-model token buckets</span>
+                <span>Backoff, jitter, Retry-After</span>
+                <span>Spend per model, hard budget</span>
+                <span>Async, streaming, LangChain, LlamaIndex</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Benchmarks ------------------------------------------------------- -->
+      <section id="benchmarks">
+        <div class="wrap">
+          <div data-reveal>
+            <span class="kicker">Benchmarks</span>
+            <h2 class="title">Numbers, not adjectives.</h2>
+            <p class="sub">
+              The hot path is Rust: hashing, the LRU, the token buckets and the pricing ledger. These
+              numbers are measured with the real OpenAI SDK over an in-memory transport, so only parry's
+              own cost is counted.
+            </p>
+          </div>
+          <div class="bench">
+            <div class="stats">
+              <div class="stat" data-reveal>
+                <div><span class="big" data-count={bench.hit}>{bench.hit}</span><span class="unit">µs</span></div>
+                <p>per cache hit, with no HTTP at all</p>
+              </div>
+              <div class="stat" data-reveal style="--d:.06s">
+                <div><span class="big" data-count={overhead} data-prefix="+">+{overhead}</span><span class="unit">µs</span></div>
+                <p>added to a cache miss</p>
+              </div>
+              <div class="stat" data-reveal style="--d:.12s">
+                <div><span class="big" data-count="0">0</span><span class="unit">files</span></div>
+                <p>of configuration required</p>
+              </div>
+              <div class="stat" data-reveal style="--d:.18s">
+                <div><span class="big" data-count="1">1</span><span class="unit">line</span></div>
+                <p>to install it, and one to remove it</p>
+              </div>
+            </div>
+            <div class="bars" data-reveal id="bars">
+              <div class="bar-row">
+                <div class="lbl"><span>Plain SDK call (baseline)</span><b>{bench.baseline} µs</b></div>
+                <div class="bar"><i data-w={pct(bench.baseline)}></i></div>
+              </div>
+              <div class="bar-row">
+                <div class="lbl"><span>With parry, cache miss</span><b>{bench.miss} µs</b></div>
+                <div class="bar miss"><i data-w={pct(bench.miss)}></i></div>
+              </div>
+              <div class="bar-row">
+                <div class="lbl"><span>With parry, cache hit</span><b>{bench.hit} µs</b></div>
+                <div class="bar hit"><i data-w={pct(bench.hit)}></i></div>
+              </div>
+              <div class="foot">{bench.env}</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Setup ------------------------------------------------------------ -->
+      <section>
+        <div class="wrap">
+          <div class="center" data-reveal>
+            <span class="kicker">Set up</span>
+            <h2 class="title">Working in under five minutes.</h2>
+          </div>
+          <div class="steps">
+            <div class="step" data-reveal>
+              <header><h3>Install</h3><p>One abi3 wheel per platform covers Python 3.10 to 3.14. It has no required dependencies.</p></header>
+              <Code code={step1} lang="bash" theme="github-dark-default" />
+            </div>
+            <div class="step" data-reveal style="--d:.08s">
+              <header><h3>Add one line</h3><p>Put it at startup. Clients created before or after it are covered.</p></header>
+              <Code code={step2} lang="python" theme="github-dark-default" />
+            </div>
+            <div class="step" data-reveal style="--d:.16s">
+              <header><h3>Watch it work</h3><p>Check hits, spend and throttling at any point.</p></header>
+              <Code code={step3} lang="python" theme="github-dark-default" />
+            </div>
+          </div>
+          <div class="scopes" data-reveal>
+            <div class="scope"><code>parry.install()</code><span>Every client in the process</span></div>
+            <div class="scope"><code>with Parry() as g:</code><span>One block, thread- and task-local</span></div>
+            <div class="scope"><code>parry.wrap(client)</code><span>A single client object</span></div>
+            <div class="scope"><code>with parry.bypass():</code><span>Turn it off for one call</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Final CTA -------------------------------------------------------- -->
+      <section class="final">
+        <div class="glow" aria-hidden="true"></div>
+        <div class="wrap" data-reveal>
+          <h2>Ship guard rails,<br /><span class="grad">not glue code.</span></h2>
+          <p class="sub" style="margin-inline:auto">Start with the quickstart, or see every option in the reference.</p>
+          <div class="hero-ctas">
+            <a class="btn primary" href={url('docs/quickstart/')}>Get started <Fragment set:html={svg('arrow')} /></a>
+            <a class="btn" href={url('docs/')}>Browse the docs</a>
+            <a class="btn" href={GITHUB}><Fragment set:html={svg('github')} />Star on GitHub</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site">
+      <div class="wrap">
+        <a class="brand" href={url('')}><img src={logo} alt="" />parry</a>
+        <span>MIT licensed · v{VERSION} · published as <code>{PYPI_NAME}</code></span>
+        <nav aria-label="Footer">
+          <a href={url('docs/')}>Docs</a>
+          <a href={url('docs/reference/api/')}>API</a>
+          <a href={url('docs/changelog/')}>Changelog</a>
+          <a href={GITHUB}>GitHub</a>
+        </nav>
+      </div>
+    </footer>
+
+    <script>
+      const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      // Nav border once the page scrolls.
+      const nav = document.getElementById('nav');
+      const onScroll = () => nav?.classList.toggle('scrolled', window.scrollY > 8);
+      onScroll();
+      window.addEventListener('scroll', onScroll, { passive: true });
+
+      // Copy buttons.
+      document.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.copy ?? '');
+            btn.classList.add('done');
+            setTimeout(() => btn.classList.remove('done'), 1600);
+          } catch {
+            /* clipboard unavailable: nothing to do */
+          }
+        });
+      });
+
+      // Rotating word in the hero.
+      const rot = document.getElementById('rot');
+      const words = ['cached', 'rate-limited', 'cost-tracked', 'budgeted', 'retried'];
+      if (rot && !reduce) {
+        let i = 0;
+        setInterval(() => {
+          rot.classList.add('out');
+          setTimeout(() => {
+            i = (i + 1) % words.length;
+            rot.textContent = words[i];
+            rot.classList.remove('out');
+          }, 330);
+        }, 2200);
+      }
+
+      // Reveal on scroll, plus one-shot effects for some elements.
+      const onVisible = new Map<Element, () => void>();
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (!e.isIntersecting) continue;
+            e.target.classList.add('in');
+            onVisible.get(e.target)?.();
+            io.unobserve(e.target);
+          }
+        },
+        { threshold: 0.15, rootMargin: '0px 0px -8% 0px' },
+      );
+      document.querySelectorAll('[data-reveal]').forEach((el) => io.observe(el));
+
+      // Terminal playback.
+      const term = document.getElementById('term');
+      const lines = term ? Array.from(term.querySelectorAll<HTMLElement>('.ln')) : [];
+      let playToken = 0;
+      async function play() {
+        const token = ++playToken;
+        lines.forEach((l) => l.classList.remove('on'));
+        for (const l of lines) {
+          const wait = reduce ? 0 : Number(l.dataset.wait ?? 250);
+          await new Promise((r) => setTimeout(r, wait));
+          if (token !== playToken) return;
+          l.classList.add('on');
+        }
+      }
+      if (term) {
+        const termObserver = new IntersectionObserver((entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            play();
+            termObserver.disconnect();
+          }
+        });
+        termObserver.observe(term);
+      }
+      document.getElementById('replay')?.addEventListener('click', play);
+
+      // Pipeline animation.
+      const pipe = document.getElementById('pipe');
+      const log = document.getElementById('pipelog');
+      const nodes = pipe ? Array.from(pipe.querySelectorAll<HTMLElement>('.node')) : [];
+      const byStep = (s: string) => nodes.find((n) => n.dataset.step === s);
+      const scenarios: Record<string, { steps: string[]; log: string; tag: string }> = {
+        miss: {
+          steps: ['code', 'cache', 'budget', 'rate', 'sdk', 'ledger'],
+          tag: 'MISS',
+          log: 'gpt-4o-mini · 612 ms · 10 in / 5 out tokens · $0.000005 recorded · stored in cache',
+        },
+        hit: {
+          steps: ['code', 'cache'],
+          tag: 'HIT',
+          log: 'gpt-4o-mini · 0.01 ms · served from cache · $0 · no rate-limit slot used',
+        },
+      };
+      let mode = 'auto';
+      let cycle = 0;
+      let pipeTimer: number | undefined;
+      const sleep = (ms: number) => new Promise((r) => (pipeTimer = window.setTimeout(r, ms)));
+      async function runPipe() {
+        const runId = ++cycle;
+        let flip = false;
+        while (runId === cycle) {
+          const name = mode === 'auto' ? (flip ? 'hit' : 'miss') : mode;
+          flip = !flip;
+          const sc = scenarios[name];
+          nodes.forEach((n) => n.classList.remove('on', 'hit', 'skip'));
+          if (log) log.innerHTML = '<span class="tag">→</span>request: create(model="gpt-4o-mini", …)';
+          for (const s of sc.steps) {
+            if (runId !== cycle) return;
+            const n = byStep(s);
+            n?.classList.add('on');
+            if (name === 'hit' && s === 'cache') n?.classList.add('hit');
+            await sleep(reduce ? 0 : 520);
+          }
+          if (name === 'hit') {
+            nodes.slice(2).forEach((n) => n.classList.add('skip'));
+          }
+          if (log) log.innerHTML = `<span class="tag ${name === 'hit' ? 'hit' : ''}">${sc.tag}</span>${sc.log}`;
+          await sleep(reduce ? 4000 : 2300);
+        }
+      }
+      document.querySelectorAll<HTMLButtonElement>('.seg button').forEach((b) => {
+        b.addEventListener('click', () => {
+          mode = b.dataset.mode ?? 'auto';
+          document.querySelectorAll('.seg button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+          window.clearTimeout(pipeTimer);
+          runPipe();
+        });
+      });
+      if (pipe) {
+        const pipeObserver = new IntersectionObserver((entries) => {
+          if (entries.some((e) => e.isIntersecting)) {
+            runPipe();
+            pipeObserver.disconnect();
+          }
+        });
+        pipeObserver.observe(pipe);
+      }
+
+      // Cursor spotlight on feature cards.
+      document.querySelectorAll<HTMLElement>('.spot').forEach((card) => {
+        card.addEventListener('pointermove', (e) => {
+          const r = card.getBoundingClientRect();
+          card.style.setProperty('--x', `${e.clientX - r.left}px`);
+          card.style.setProperty('--y', `${e.clientY - r.top}px`);
+        });
+      });
+
+      // Counters and benchmark bars.
+      document.querySelectorAll<HTMLElement>('[data-count]').forEach((el) => {
+        const target = Number(el.dataset.count);
+        const prefix = el.dataset.prefix ?? '';
+        const card = el.closest('[data-reveal]');
+        if (!card || reduce || target <= 1) return;
+        // The final value stays in the HTML; it is only rolled up from 0
+        // once visible, and always lands on the target even if animation
+        // frames are throttled (background tabs).
+        onVisible.set(card, () => {
+          const final = `${prefix}${target}`;
+          const start = performance.now();
+          el.textContent = `${prefix}0`;
+          const tick = (t: number) => {
+            const p = Math.min(1, (t - start) / 1100);
+            el.textContent = `${prefix}${Math.round(target * (1 - Math.pow(1 - p, 3)))}`;
+            if (p < 1) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+          setTimeout(() => (el.textContent = final), 1300);
+        });
+      });
+      const bars = document.getElementById('bars');
+      const fillBars = () =>
+        bars?.querySelectorAll<HTMLElement>('i[data-w]').forEach((i) => (i.style.width = i.dataset.w ?? '0'));
+      if (bars) {
+        if (reduce) fillBars();
+        else onVisible.set(bars, fillBars);
+      }
+    </script>
+  </body>
+</html>

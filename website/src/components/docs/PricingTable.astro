@@ -1,0 +1,79 @@
+---
+// The built-in pricing table, rendered from src/cost.rs at build time.
+import { pricing } from '../../data/site';
+
+const groups = [
+  { id: 'openai', label: 'OpenAI', rows: pricing.rows.filter((r) => r.provider === 'openai') },
+  { id: 'anthropic', label: 'Anthropic', rows: pricing.rows.filter((r) => r.provider === 'anthropic') },
+];
+const fmt = (n: number) => `$${n.toFixed(2)}`;
+---
+
+<div class="parry-pricing">
+  <div class="pw" style="padding:0.9rem 1rem;margin-block:1.25rem 1rem">
+    <label>
+      Filter models
+      <input type="search" placeholder="e.g. opus, gpt-4o, mini" data-filter />
+    </label>
+  </div>
+  {
+    groups.map((g) => (
+      <div data-group={g.id}>
+        <h3>{g.label}</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Model prefix</th>
+              <th>Input / 1M tokens</th>
+              <th>Output / 1M tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {g.rows.map((r) => (
+              <tr data-model={r.model}>
+                <td>
+                  <code>{r.model}</code>
+                </td>
+                <td>
+                  {fmt(r.input)}
+                  {r.longThreshold !== undefined && (
+                    <small>
+                      <br />
+                      {fmt(r.longInput!)} above {r.longThreshold.toLocaleString('en-US')} tokens
+                    </small>
+                  )}
+                </td>
+                <td>
+                  {fmt(r.output)}
+                  {r.longThreshold !== undefined && (
+                    <small>
+                      <br />
+                      {fmt(r.longOutput!)} above {r.longThreshold.toLocaleString('en-US')} tokens
+                    </small>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ))
+  }
+  <p class="pw-note">{pricing.rows.length} rows, last verified {pricing.verified}. Generated from <code>src/cost.rs</code>.</p>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>('.parry-pricing').forEach((root) => {
+    const input = root.querySelector<HTMLInputElement>('[data-filter]');
+    input?.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase();
+      root.querySelectorAll<HTMLElement>('tr[data-model]').forEach((tr) => {
+        tr.style.display = !q || (tr.dataset.model ?? '').includes(q) ? '' : 'none';
+      });
+      root.querySelectorAll<HTMLElement>('[data-group]').forEach((g) => {
+        const any = Array.from(g.querySelectorAll<HTMLElement>('tr[data-model]')).some((tr) => tr.style.display !== 'none');
+        g.style.display = any ? '' : 'none';
+      });
+    });
+  });
+</script>

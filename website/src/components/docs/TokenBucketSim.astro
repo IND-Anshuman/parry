@@ -1,0 +1,178 @@
+---
+// A live token bucket: same semantics as parry's limiter (capacity = burst,
+// continuous refill at requests_per_minute / 60 per second).
+---
+
+<div class="pw parry-bucket">
+  <p class="pw-title">Token bucket simulator</p>
+  <div class="pw-grid">
+    <label>requests_per_minute<input data-f="rpm" type="number" min="1" max="600" value="60" /></label>
+    <label>burst<input data-f="burst" type="number" min="1" max="60" value="5" /></label>
+    <label>
+      on_rate_limit
+      <select data-f="mode"><option value="wait">"wait"</option><option value="raise">"raise"</option></select>
+    </label>
+  </div>
+  <div class="pbk-tank" aria-hidden="true">
+    <div class="pbk-fill" data-fill></div>
+    <span class="pbk-count" data-count></span>
+  </div>
+  <div class="pw-row">
+    <button class="pw-btn" type="button" data-send="1">Send 1 request</button>
+    <button class="pw-btn ghost" type="button" data-send="10">Send 10 at once</button>
+    <button class="pw-btn ghost" type="button" data-reset>Reset</button>
+  </div>
+  <ol class="pbk-log" data-log aria-live="polite"></ol>
+</div>
+
+<style is:global>
+  .pbk-tank {
+    position: relative;
+    height: 2.4rem;
+    margin-top: 1.1rem;
+    border-radius: 0.7rem;
+    border: 1px solid var(--parry-border);
+    background: var(--sl-color-black);
+    overflow: hidden;
+  }
+  .pbk-fill {
+    position: absolute;
+    transition: width 0.08s linear;
+    inset: 0 auto 0 0;
+    width: 100%;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--sl-color-accent) 70%, transparent), color-mix(in srgb, var(--parry-cyan) 70%, transparent));
+    box-shadow: 0 0 22px color-mix(in srgb, var(--parry-cyan) 45%, transparent);
+  }
+  .pbk-count {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-family: var(--sl-font-mono);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  }
+  .pbk-log {
+    list-style: none;
+    padding: 0 !important;
+    margin: 1rem 0 0 !important;
+    max-height: 12rem;
+    overflow: auto;
+    font-family: var(--sl-font-mono);
+    font-size: 0.78rem;
+    display: grid;
+    gap: 0.25rem;
+  }
+  .pbk-log li {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    margin: 0 !important;
+    animation: pbk-in 0.25s ease;
+  }
+  .pbk-log b {
+    font-size: 0.68rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: 0.3rem;
+    color: #0a0b14;
+    min-width: 3.6rem;
+    text-align: center;
+  }
+  .pbk-log .sent b {
+    background: var(--parry-green);
+  }
+  .pbk-log .waited b {
+    background: var(--parry-amber);
+  }
+  .pbk-log .raised b {
+    background: var(--parry-red);
+  }
+  @keyframes pbk-in {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+  }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLElement>('.parry-bucket').forEach((root) => {
+    const f = (k: string) => root.querySelector<HTMLInputElement & HTMLSelectElement>(`[data-f="${k}"]`)!;
+    const fill = root.querySelector<HTMLElement>('[data-fill]')!;
+    const count = root.querySelector<HTMLElement>('[data-count]')!;
+    const log = root.querySelector<HTMLOListElement>('[data-log]')!;
+    let tokens = Number(f('burst').value);
+    let last = performance.now();
+    let seq = 0;
+    // Requests waiting for a slot, in order (wait mode).
+    const queue: { id: number; since: number }[] = [];
+
+    const cfg = () => ({
+      rate: Math.max(1, Number(f('rpm').value) || 1) / 60,
+      burst: Math.max(1, Number(f('burst').value) || 1),
+      mode: f('mode').value,
+    });
+    const entry = (cls: string, tag: string, text: string) => {
+      const li = document.createElement('li');
+      li.className = cls;
+      li.innerHTML = `<b>${tag}</b><span>${text}</span>`;
+      log.prepend(li);
+      while (log.children.length > 40) log.lastElementChild?.remove();
+    };
+
+    // Refill from elapsed wall time. Called on every frame *and* before every
+    // send, so throttled animation frames never distort the bucket.
+    const refill = (now: number) => {
+      const { rate, burst } = cfg();
+      tokens = Math.min(burst, tokens + (Math.max(0, now - last) / 1000) * rate);
+      last = now;
+    };
+
+    const tick = (now: number) => {
+      const { burst } = cfg();
+      refill(now);
+      const { rate } = cfg();
+      while (queue.length && tokens >= 1) {
+        const q = queue.shift()!;
+        // When did this slot actually become free? Tokens accrue linearly, so
+        // the (tokens - 1) surplus was earned after it.
+        const freedAt = Math.max(q.since, now - ((tokens - 1) / rate) * 1000);
+        tokens -= 1;
+        entry('waited', 'WAITED', `request #${q.id} sent after ${((freedAt - q.since) / 1000).toFixed(2)} s`);
+      }
+      fill.style.width = `${(tokens / burst) * 100}%`;
+      count.textContent = `${tokens.toFixed(2)} / ${burst} slots${queue.length ? ` · ${queue.length} waiting` : ''}`;
+    };
+
+    const send = (n: number) => {
+      const { mode, rate } = cfg();
+      refill(performance.now());
+      for (let i = 0; i < n; i++) {
+        const id = ++seq;
+        if (!queue.length && tokens >= 1) {
+          tokens -= 1;
+          entry('sent', 'SENT', `request #${id} went straight through`);
+        } else if (mode === 'raise') {
+          const wait = (1 - tokens) / rate;
+          entry('raised', 'RAISED', `request #${id}: parry.RateLimited(retry_after=${wait.toFixed(2)} s)`);
+        } else {
+          queue.push({ id, since: performance.now() });
+        }
+      }
+    };
+
+    root.querySelectorAll<HTMLButtonElement>('[data-send]').forEach((b) =>
+      b.addEventListener('click', () => send(Number(b.dataset.send))),
+    );
+    root.querySelector('[data-reset]')?.addEventListener('click', () => {
+      tokens = cfg().burst;
+      last = performance.now();
+      queue.length = 0;
+      log.innerHTML = '';
+    });
+    // A timer, not requestAnimationFrame: it keeps draining the queue in background tabs.
+    setInterval(() => tick(performance.now()), 50);
+  });
+</script>

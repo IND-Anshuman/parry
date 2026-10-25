@@ -1,0 +1,84 @@
+---
+// Benchmark figures, read from the README's BENCH block at build time.
+import { bench } from '../../data/site';
+
+const overhead = Math.round(bench.miss - bench.baseline);
+const max = Math.max(bench.baseline, bench.miss);
+const rows = [
+  { label: 'Plain SDK call (baseline)', v: bench.baseline, cls: '' },
+  { label: 'With parry, cache miss', v: bench.miss, cls: 'miss', note: `+${overhead} µs` },
+  { label: 'With parry, cache hit', v: bench.hit, cls: 'hit', note: `${(bench.baseline / bench.hit).toFixed(0)}× faster than the baseline` },
+];
+---
+
+<div class="pw parry-bench">
+  <p class="pw-title">Time per call</p>
+  {
+    rows.map((r) => (
+      <div class="pbn-row">
+        <div class="pbn-lbl">
+          <span>{r.label}</span>
+          <b>
+            {r.v} µs{r.note && <em> · {r.note}</em>}
+          </b>
+        </div>
+        <div class={`pbn-bar ${r.cls}`}>
+          <i style={`width:${Math.max(1.5, (r.v / max) * 100).toFixed(1)}%`} />
+        </div>
+      </div>
+    ))
+  }
+  <p class="pw-note">{bench.env}</p>
+</div>
+
+<style>
+  .pbn-row {
+    margin-top: 0.9rem;
+  }
+  .pbn-lbl {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-size: 0.86rem;
+  }
+  .pbn-lbl b {
+    font-family: var(--sl-font-mono);
+    font-weight: 600;
+    font-size: 0.8rem;
+  }
+  .pbn-lbl em {
+    font-style: normal;
+    color: var(--sl-color-gray-3);
+  }
+  .pbn-bar {
+    height: 0.65rem;
+    border-radius: 99px;
+    background: var(--parry-border);
+    overflow: hidden;
+    margin-top: 0.35rem !important;
+  }
+  .pbn-bar i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--sl-color-gray-4);
+    animation: pbn-grow 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .pbn-bar.miss i {
+    background: linear-gradient(90deg, var(--sl-color-gray-4) 90%, var(--sl-color-accent) 90%);
+  }
+  .pbn-bar.hit i {
+    background: var(--parry-green);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--parry-green) 55%, transparent);
+  }
+  @keyframes pbn-grow {
+    from {
+      width: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pbn-bar i {
+      animation: none;
+    }
+  }
+</style>
