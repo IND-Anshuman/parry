@@ -1,0 +1,82 @@
+---
+title: Retries & backoff
+description: Which errors parry retries, the exact backoff formula, Retry-After handling, and how parry's retries stack with the SDK's own.
+---
+
+import RetryTimeline from '../../../../components/docs/RetryTimeline.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+parry retries **transient** failures with exponential backoff and jitter. It
+never retries errors that will fail again, such as an invalid key or a
+malformed request.
+
+```python
+parry.install(max_attempts=3, retry_base_delay=0.5, retry_max_delay=30.0)
+parry.install(retry=False)   # turn parry's retry layer off
+```
+
+<RetryTimeline />
+
+## What gets retried
+
+| Retried | Never retried |
+|---|---|
+| `RateLimitError` (429) | `BadRequestError` (400) |
+| `APITimeoutError`, `APIConnectionError` | `AuthenticationError` (401) |
+| `InternalServerError` and every 5xx | `PermissionDeniedError` (403) |
+| Anthropic overload (529) | `NotFoundError` (404) |
+| 408, 409, 425 | `UnprocessableEntityError` (422) |
+| httpx timeouts and connection errors | parry's own `BudgetExceeded` / `RateLimited` |
+
+Errors are classified by HTTP status when there is one, and by exception class
+name otherwise. Retries exhausted? The SDK's last exception is re-raised
+**unchanged**, so your existing `except openai.RateLimitError:` blocks still
+work.
+
+## The formula
+
+For the *n*-th failure (counting from 1):
+
+```text
+raw   = min(retry_max_delay, retry_base_delay × 2^(n-1))
+delay = raw/2 + random(0, raw/2)        # "equal jitter": never an instant retry
+```
+
+If the response carries a `retry-after-ms` or `retry-after` header, that value
+is used instead, capped at `retry_max_delay`.
+
+## Retries stack with the SDK's own
+
+<Aside type="caution" title="Two retry layers">
+The OpenAI and Anthropic SDKs already retry twice by default
+(`max_retries=2`). With parry on top, a single request can be attempted
+`max_attempts × (max_retries + 1)` times, which is **9** with the defaults.
+</Aside>
+
+Pick one layer to own retries:
+
+```python
+# parry is the only retry layer (recommended: consistent policy, counted in stats)
+client = openai.OpenAI(max_retries=0)
+
+# or keep the SDK's retries and switch parry's off
+parry.install(retry=False)
+```
+
+## Retries and the other features
+
+- Each retry takes a fresh **rate-limit** slot.
+- Every retry is counted in `stats.retries`, and calls that finally fail in
+  `stats.errors`.
+- The budget is checked once, before the first attempt.
+
+## Standalone use
+
+```python
+from parry import Retry
+
+retry = Retry(max_attempts=5, base_delay=0.25)
+result = retry.call(flaky_function, arg, key="value")   # sleeps with the GIL released
+retry.delay(3)                                           # inspect the schedule
+Retry.is_retryable("RateLimitError", 429)                # True
+```

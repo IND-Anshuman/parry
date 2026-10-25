@@ -1,0 +1,106 @@
+---
+title: Response caching
+description: How parry decides two requests are the same, what is and isn't cached, TTLs, size bounds and the raw-response path.
+---
+
+import CacheKeyPlayground from '../../../../components/docs/CacheKeyPlayground.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+When a request is identical to one parry has already answered, parry returns
+the stored response straight away. A cache hit takes **about 10 µs**, makes no
+network call, costs **$0**, and doesn't use any rate-limit capacity.
+
+```python
+parry.install()                       # cache on, 10,000 entries, 1 h TTL
+parry.install(cache_ttl=24 * 3600)    # keep entries for a day
+parry.install(cache_size=50_000)      # more entries
+parry.install(cache=False)            # no caching
+```
+
+## What counts as "the same request"?
+
+The cache key is a **blake3** hash of two things:
+
+1. a namespace: `provider : endpoint : client.base_url`. OpenAI, Azure and a
+   local OpenAI-compatible server therefore never share entries, even with the
+   same model name.
+2. every request field **except** a short list of transport and bookkeeping fields.
+
+| Ignored (non-semantic) | Part of the key (everything else), for example |
+|---|---|
+| `stream`, `stream_options`, `timeout` | `model`, `messages`, `input`, `system`, `instructions` |
+| `extra_headers`, `extra_query`, `extra_body` | `temperature`, `top_p`, `seed`, `stop`, `n` |
+| `user`, `metadata`, `store`, `service_tier` | `max_tokens`, `max_completion_tokens` |
+| `safety_identifier`, `prompt_cache_key`, `prompt_cache_retention` | `tools`, `tool_choice`, `response_format` |
+| `background`, `betas` | `reasoning`, `thinking`, `output_config`, … |
+
+Before hashing, the request JSON is **canonicalised**: object keys are sorted,
+`\r\n` becomes `\n`, and leading and trailing whitespace of every string is
+trimmed. Internal whitespace is kept exactly, because it matters for code.
+Timestamps are not stripped, because that would change what the prompt means.
+
+Try it:
+
+<CacheKeyPlayground />
+
+<Aside type="note" title="Why not just (model, messages)?">
+A key built from only a few fields would collide requests that differ in
+`response_format`, `system`, `max_tokens` or `tools`, and serve the wrong
+answer. parry would rather miss than return the wrong response.
+</Aside>
+
+## What is not cached
+
+- **Streaming requests never *read* the cache.** If a text-only stream runs to
+  completion, its assembled response is *stored*, so the next identical
+  **non-streaming** call is a hit.
+- Responses API calls with `background=True`, and responses whose `status`
+  isn't `completed`.
+- Anthropic responses with `stop_reason="pause_turn"`.
+- Requests containing something parry can't hash deterministically. The other
+  features still apply to these.
+
+## Bounded, always
+
+The cache is a [moka](https://github.com/moka-rs/moka) LRU with a TTL. It is
+**always bounded**: `cache_size=None` or `0` raises `ValueError`, because an
+"unlimited" in-process cache is a memory leak waiting to happen. Values are
+stored as strings in Rust, so eviction never needs the GIL.
+
+## Cache hits return real SDK objects
+
+On a hit, the stored JSON is validated back into the SDK's own type
+(`ChatCompletion`, `Message`, `Response`), so `isinstance` checks and
+attribute access behave exactly as they would on a live response. If an SDK
+upgrade means an old entry no longer fits the type, parry drops it and treats
+the call as a miss.
+
+Calls made through `.with_raw_response` get a `parry.CachedRawResponse` on a
+hit. It provides `.parse()`, `.headers` (including `x-parry-cache: hit`),
+`.json()`, `.text` and `.read()`. On async clients, `parse()` is awaitable
+whenever the installed SDK's own `parse()` is.
+
+## Persisting the cache
+
+```python
+parry.install(storage="parry.db")
+```
+
+Entries are written to SQLite along with their TTL, and reloaded on demand
+after a restart. See [Persistence & CLI](/docs/guides/persistence/).
+
+## Clearing and bypassing
+
+```python
+guard = parry.get_guard()
+guard.clear_cache()          # memory + SQLite
+
+with parry.bypass():         # skip parry entirely for these calls
+    fresh = client.chat.completions.create(...)
+```
+
+<Aside type="caution" title="Sampling and caching">
+With caching on, identical requests return identical answers even at
+`temperature=1`. If you rely on varied samples, for example for
+self-consistency or best-of-n, disable caching for that code path.
+</Aside>

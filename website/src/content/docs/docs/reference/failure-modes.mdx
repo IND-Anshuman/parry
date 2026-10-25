@@ -1,0 +1,42 @@
+---
+title: Failure modes
+description: Exactly what parry does when something goes wrong, from missing prices to corrupt databases, and what v0.1 does not intercept.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+parry follows one rule: **a guard rail must never be the reason your call
+fails**, unless failing is the point, as with a budget or a rate limit in
+`"raise"` mode.
+
+| Situation | What parry does |
+|---|---|
+| Model missing from the pricing table | records the call at $0, logs **one** warning per model, and counts it in `unpriced_requests`. The budget can't see that spend, so add a price with `set_pricing` |
+| Rate limit exhausted | `"wait"`: sleeps, then raises `parry.RateLimited` after `max_wait`. `"raise"`: raises immediately |
+| Budget reached | raises `parry.BudgetExceeded` **before** sending. Cache hits are still served |
+| SQLite file corrupt, locked or read-only | logs a warning and continues **in memory only** |
+| Cached entry no longer matches the SDK's types (after an SDK upgrade) | drops the entry and treats the call as a miss |
+| Request contains something that can't be hashed | skips the cache for that call. Everything else still applies |
+| parry's own bookkeeping raises | logs a warning. **Your response is still returned** |
+| SDK not installed | `install()` skips that SDK |
+| Retries exhausted | re-raises the SDK's last exception **unchanged** |
+| Non-retryable error (400, 401, 403, 404, 422) | raised immediately, never retried |
+| `create()` called with positional arguments | passed straight to the SDK |
+| Stream closed early, or it errors | the usage seen so far is recorded. Nothing is cached |
+
+## Not intercepted
+
+These calls go straight to the SDK in v0.1:
+
+- `client.chat.completions.parse(...)` and `client.responses.parse(...)`
+- the `client.messages.stream(...)` and `client.beta.chat.completions.stream(...)` helpers.
+  `create(stream=True)` **is** covered.
+- `.with_streaming_response`: rate limits and the budget apply, but there is no caching or cost tracking
+- `create(stream=True)` through `.with_raw_response`: rate limits and the budget apply, but there is no caching or cost tracking
+- embeddings, batches, files, images and audio
+
+<Aside type="caution" title="Per process">
+The cache, rate limits and ledger are **per process**. With several workers,
+each one has its own buckets and its own budget. Divide your limits between
+them, or put an API gateway in front of the provider.
+</Aside>

@@ -1,0 +1,68 @@
+---
+title: LlamaIndex
+description: Use parry with LlamaIndex query engines and chat engines, through install() or the ParryHandler callback.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Option 1: `install()` (recommended)
+
+LlamaIndex's `OpenAI` and `Anthropic` LLMs call the official SDKs, so
+`install()` covers them, **caching included**:
+
+```python
+import parry
+from llama_index.core import Settings, VectorStoreIndex, SimpleDirectoryReader
+from llama_index.llms.openai import OpenAI
+
+parry.install()
+Settings.llm = OpenAI(model="gpt-4o-mini")
+
+index = VectorStoreIndex.from_documents(SimpleDirectoryReader("docs/").load_data())
+engine = index.as_query_engine()
+engine.query("What does max_cost_usd do?")
+engine.query("What does max_cost_usd do?")    # the LLM call is a cache hit
+```
+
+## Option 2: `ParryHandler`
+
+The handler applies rate limiting, the budget and cost tracking at the
+LlamaIndex **event** level:
+
+```python
+from llama_index.core import Settings
+from llama_index.core.callbacks import CallbackManager
+from parry import Parry
+from parry.integrations.llamaindex import ParryHandler
+
+guard = Parry(max_cost_usd=1)
+Settings.callback_manager = CallbackManager([ParryHandler(guard)])
+
+engine = index.as_query_engine()
+engine.query("...")
+print(guard.stats.summary())
+```
+
+The handler reads token usage from the raw provider response, then from
+`additional_kwargs`, and estimates with tiktoken as a last resort.
+`BudgetExceeded` raised in `on_event_start` stops the query before the LLM is
+called.
+
+<Aside type="note" title="ServiceContext is gone">
+Older LlamaIndex tutorials use `ServiceContext.from_defaults(callback_manager=...)`.
+LlamaIndex has removed it. Use `Settings.callback_manager`, or pass
+`callback_manager=` to the LLM directly.
+</Aside>
+
+## Using both
+
+As with LangChain, you can use both with the same guard without double
+counting:
+
+```python
+guard = parry.install()
+Settings.callback_manager = CallbackManager([ParryHandler(guard)])
+```
+
+Embeddings calls (`OpenAIEmbedding`) are not intercepted in v0.1. Only LLM
+calls are.

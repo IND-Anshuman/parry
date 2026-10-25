@@ -1,0 +1,48 @@
+---
+title: CLI
+description: The parry command line tool for spend reports and the pricing table.
+---
+
+Installing `llm-parry` puts a `parry` command on your PATH. `python -m parry`
+works as well.
+
+## `parry stats`
+
+Reports the spend recorded in a SQLite database (see
+[Persistence](/docs/guides/persistence/)).
+
+```bash
+parry stats [--db PATH] [--json]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--db` | `parry.db` | path to the database |
+| `--json` | off | print `{"lifetime": …, "today": …, "by_model": …}` |
+
+The command exits with status `1` if the database doesn't exist or can't be
+opened.
+
+```bash
+$ parry stats --db parry.db
+lifetime  $3.1842  1204 requests  2311040 in / 401229 out
+today     $0.4210  163 requests
+
+  openai:gpt-4o-mini                              980 req  $    0.5912
+  anthropic:claude-opus-5-5                       224 req  $    2.5930
+```
+
+## `parry pricing`
+
+Prints the built-in [pricing table](/docs/reference/pricing/).
+
+```bash
+parry pricing [--provider {openai,anthropic}] [--json]
+```
+
+## `parry --version`
+
+```bash
+$ parry --version
+parry 0.1.0
+```

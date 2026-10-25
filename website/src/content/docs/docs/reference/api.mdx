@@ -1,0 +1,174 @@
+---
+title: Python API
+description: Reference for every public function, class, method and exception in parry.
+tableOfContents:
+  maxHeadingLevel: 3
+---
+
+Everything below can be imported from the top-level `parry` package.
+
+## Module functions
+
+### `install`
+
+```python
+parry.install(guard: Parry | None = None, *, sync=True, async_=True,
+              openai=True, anthropic=True, **options) -> Parry
+```
+
+Hooks the SDKs and makes `guard` (or a new `Parry(**options)`) the global
+guard. It is idempotent, and calling it again with no arguments returns the
+installed guard. Passing both a guard and options raises `TypeError`.
+
+### `install_async`
+
+```python
+parry.install_async(guard: Parry | None = None, **options) -> Parry
+```
+
+The same as `install(sync=False)`.
+
+### `uninstall`
+
+```python
+parry.uninstall() -> None
+```
+
+Restores the original SDK methods and forgets the global guard.
+
+### `is_installed` · `get_guard` · `stats`
+
+```python
+parry.is_installed() -> bool        # hooks applied and a global guard set
+parry.get_guard() -> Parry | None   # with-block guard first, then the installed guard
+parry.stats() -> ParryStats         # stats of get_guard(), or an empty snapshot
+```
+
+### `wrap` · `unwrap`
+
+```python
+parry.wrap(client, guard: Parry | None = None) -> client
+parry.unwrap(client) -> client
+```
+
+Binds a guard to one SDK client object. It returns the same client, so you
+can wrap it inline: `client = parry.wrap(openai.OpenAI())`.
+
+### `bypass`
+
+```python
+with parry.bypass():
+    ...
+```
+
+A context manager that turns parry off for every call inside it.
+
+### `storage`
+
+```python
+parry.storage(path) -> Parry
+```
+
+Enables SQLite persistence on the global guard, creating the guard if needed.
+
+### `count_tokens` · `estimate_tokens`
+
+```python
+parry.count_tokens(text: str, model: str = "gpt-4o") -> int
+parry.estimate_tokens(payload_json: str, model: str = "gpt-4o") -> int
+```
+
+tiktoken counts. `estimate_tokens` counts the prompt fields of a JSON request
+plus a per-message overhead.
+
+## `Parry`
+
+```python
+class Parry:
+    def __init__(self, *, cache=True, rate_limit=True, cost_tracking=True, retry=True,
+                 max_cost_usd=None, cache_ttl=3600, cache_size=10_000,
+                 on_rate_limit="wait", max_wait=60.0, max_attempts=3,
+                 retry_base_delay=0.5, retry_max_delay=30.0, storage=None): ...
+```
+
+See [Configuration](/docs/reference/configuration/) for every option.
+
+### Configuration methods
+
+| Method | Returns | Description |
+|---|---|---|
+| `set_rate_limit(model, requests_per_minute=None, tokens_per_minute=None, *, burst=None, provider=None)` | `Parry` | add or replace a rule. With no limits, the rule means "unlimited" |
+| `remove_rate_limit(model, *, provider=None)` | `bool` | remove a rule |
+| `rate_limit_for(provider, model)` | `dict` | the rule that applies |
+| `set_pricing(model, input_per_million, output_per_million)` | `Parry` | price an unknown model, or override a built-in price |
+| `set_cache(backend="memory", *, path=None)` | `Parry` | `"memory"` or `"sqlite"` |
+| `storage(path)` | `Parry` | enable SQLite persistence |
+| `clear_cache()` | `None` | empty the memory and SQLite caches |
+| `reset_stats()` | `None` | zero the counters and session spend, which restarts the budget |
+
+### Activation
+
+| Member | Description |
+|---|---|
+| `install(**kwargs)` | `parry.install(self, **kwargs)` |
+| `wrap(client)` | `parry.wrap(client, self)` |
+| `with guard:` / `async with guard:` | make this the guard for the enclosed block (thread- and task-local) |
+| `is_intercepting` | `True` if SDK calls currently reach this guard through the hooks |
+
+### Introspection
+
+| Member | Type | Description |
+|---|---|---|
+| `stats` | `ParryStats` | snapshot of the counters |
+| `total_cost_usd` | `float` | session spend |
+
+### Building blocks
+
+| Method | Description |
+|---|---|
+| `acquire(provider, model, tokens=0)` | block until the rate limiter admits a request, or raise `RateLimited` |
+| `await acquire_async(provider, model, tokens=0)` | async version |
+| `check_budget(model="", prompt_tokens=0)` | raise `BudgetExceeded` if this call would cross the budget |
+| `record_usage(provider, model, input_tokens, output_tokens, *, estimated=False)` | record a call made outside the hooks. Returns its cost |
+
+## `ParryStats`
+
+A frozen dataclass. See [Stats & logging](/docs/guides/observability/#stats)
+for every field. It also has `cache_hit_rate` (a property) and `summary()`,
+which returns a human-readable report.
+
+## `CachedRawResponse` · `AsyncCachedRawResponse`
+
+Returned on a cache hit for calls made through `.with_raw_response`.
+
+| Member | Description |
+|---|---|
+| `parse()` | the cached SDK object. On `AsyncCachedRawResponse` it is awaitable |
+| `headers` | `{"x-parry-cache": "hit"}` |
+| `status_code` | `200` |
+| `json()`, `text`, `content`, `read()` | the serialised response |
+
+## Exceptions
+
+```python
+class ParryError(Exception): ...
+
+class BudgetExceeded(ParryError):
+    spent_usd: float
+    limit_usd: float
+    estimate_usd: float
+    model: str
+
+class RateLimited(ParryError):
+    provider: str
+    model: str
+    retry_after: float      # seconds until a slot frees up
+```
+
+SDK exceptions, such as `openai.RateLimitError` after the last retry, are
+re-raised unchanged, never wrapped.
+
+## Rust primitives
+
+`Cache`, `RateLimit`, `Cost` and `Retry` are documented in
+[Custom clients & primitives](/docs/guides/custom-clients/#the-rust-primitives).

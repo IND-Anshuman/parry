@@ -1,0 +1,102 @@
+---
+title: Scoping a guard
+description: Apply parry to the whole process, to one block of code, or to a single client, and how the scopes combine.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+A **guard** is a `parry.Parry` object. It owns one cache, one set of rate-limit
+buckets, one spend ledger and one retry policy. You choose where it applies.
+
+<Tabs>
+<TabItem label="Whole process">
+```python
+import parry
+
+guard = parry.install()                     # default guard
+guard = parry.install(max_cost_usd=10)      # guard with options
+guard = parry.install(parry.Parry(...))     # a guard you built yourself
+```
+Every OpenAI and Anthropic client in the process is covered, including
+clients created by frameworks and clients created *before* this line.
+</TabItem>
+<TabItem label="One block">
+```python
+from parry import Parry
+
+with Parry(cache=False, max_cost_usd=1) as guard:
+    run_eval_suite()          # every call in here goes through `guard`
+print(guard.stats.summary())
+```
+The scope is **thread- and task-local** (it uses `contextvars`), so concurrent
+requests in a web server don't leak into each other. `async with` works too.
+</TabItem>
+<TabItem label="One client">
+```python
+import openai, parry
+
+client = parry.wrap(openai.OpenAI())            # new default guard
+client = parry.wrap(openai.OpenAI(), my_guard)  # or bind a specific one
+client = my_guard.wrap(openai.OpenAI())         # same thing
+
+parry.unwrap(client)                            # undo
+```
+Only this client object is guarded. Other clients are untouched.
+</TabItem>
+</Tabs>
+
+## Precedence
+
+When more than one scope applies, the most specific wins:
+
+1. `with parry.bypass():` turns parry **off** for everything inside it
+2. a client bound with `parry.wrap(client, guard)`
+3. the innermost `with Parry():` block
+4. the guard from `parry.install()`
+5. no guard: the call goes straight to the SDK
+
+```python
+parry.install()                       # global guard A
+
+with Parry() as b:                    # B wins inside the block
+    client.chat.completions.create(...)
+
+c = Parry()
+special = c.wrap(openai.OpenAI())     # C always wins for `special`
+
+with parry.bypass():
+    client.chat.completions.create(...)   # no parry at all
+```
+
+## Installing more than once
+
+`install()` is idempotent. SDK methods are never wrapped twice.
+
+| Call | Effect |
+|---|---|
+| `parry.install()` again with no arguments | returns the guard that is already installed |
+| `parry.install(cache=False)` | creates a **new** guard with those options and installs it |
+| `parry.install(guard, cache=False)` | `TypeError`: pass a guard *or* options, not both |
+| `parry.uninstall()` | removes every hook and forgets the global guard |
+
+## Choosing what to hook
+
+```python
+parry.install(anthropic=False)        # OpenAI only
+parry.install(sync=False)             # async clients only
+parry.install_async()                 # same as above
+```
+
+## Finding the active guard
+
+```python
+parry.get_guard()     # with-block guard, else the installed guard, else None
+parry.is_installed()  # hooks applied and a global guard set
+parry.stats()         # stats of the active guard
+guard.is_intercepting # True if this guard receives SDK calls through the hooks
+```
+
+<Aside type="caution" title="wrap() and with_options()">
+`client.with_options(timeout=5)` returns a **new** client object. If you used
+`wrap()`, wrap the new one too. `install()` covers it automatically.
+</Aside>

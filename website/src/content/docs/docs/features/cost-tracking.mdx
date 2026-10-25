@@ -1,0 +1,84 @@
+---
+title: Cost tracking
+description: How parry prices every call, what is and isn't modelled, per-model breakdowns, and how to add prices for models the table doesn't know.
+---
+
+import CostCalculator from '../../../../components/docs/CostCalculator.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+Every call that reaches a provider is priced from the response's **actual
+token usage** and recorded in a thread-safe ledger. Cache hits are recorded
+as savings, not spend.
+
+```python
+s = parry.stats()
+s.total_cost_usd        # this session
+s.input_tokens, s.output_tokens
+s.cost_saved_usd        # what cache hits would have cost
+s.by_model              # {'openai:gpt-4o-mini': {'requests': 12, 'cost_usd': 0.0021, ...}, ...}
+```
+
+## Estimate your own workload
+
+<CostCalculator />
+
+## Where prices come from
+
+parry ships a dated pricing table compiled into the Rust core. It is the same
+table shown on the [Pricing table](/docs/reference/pricing/) page, which is
+generated from the source. Models are matched by **longest prefix on a `-`,
+`@` or `:` boundary**:
+
+| Model id you send | Priced as |
+|---|---|
+| `gpt-4o-2024-08-06` | `gpt-4o` |
+| `gpt-4o-2024-05-13` | its own row |
+| `gpt-4o-mini-2024-07-18` | `gpt-4o-mini` (longest prefix wins) |
+| `ft:gpt-4o-mini-2024-07-18:acme::abc` | `gpt-4o-mini` (fine-tune prefix stripped) |
+| `anthropic.claude-opus-5-5` | `claude-opus-5-5` (Bedrock-style id) |
+| `openai/gpt-4o` | `gpt-4o` (router-style id) |
+
+When the response reports the model it actually used, as Azure deployments
+do, parry prices that model instead of the name you requested.
+
+## Models the table doesn't know
+
+```python
+guard.set_pricing("my-finetune", input_per_million=3.0, output_per_million=12.0)
+guard.set_pricing("gpt-4o", input_per_million=2.0, output_per_million=8.0)   # negotiated rate
+```
+
+An override competes with the built-in rows on prefix length, so overriding
+`gpt-4o` doesn't reprice `gpt-4o-mini`.
+
+An unknown model is recorded at **$0**, logged **once** as a warning, and
+counted in `stats.unpriced_requests`. Because its spend is invisible to the
+budget, add a price for it.
+
+## What the numbers include
+
+- **OpenAI**: `prompt_tokens` and `completion_tokens` at standard
+  short-context rates. Cached-input discounts, batch and flex tiers are not
+  modelled, so the recorded cost is an upper bound.
+- **Anthropic**: prompt-cache writes count at **1.25×** and cache reads at
+  **0.1×** the input price, matching Anthropic's billing.
+- **Tiered models** such as `claude-haiku-5-5` switch to their long-context
+  rates above the threshold.
+- **Streams** use the usage the provider sends in the stream. Anthropic always
+  sends it; OpenAI does with `stream_options={"include_usage": True}`.
+  Otherwise parry estimates with tiktoken and counts the call in
+  `stats.estimated_requests`.
+
+<Aside type="tip">
+Turn on [SQLite storage](/docs/guides/persistence/) for **today** and
+**lifetime** totals (`stats.today_cost_usd`, `stats.lifetime_cost_usd`) and the
+`parry stats` CLI report.
+</Aside>
+
+## Recording calls parry didn't see
+
+```python
+cost = guard.record_usage("myprovider", "my-model", input_tokens=1200, output_tokens=300)
+```
+
+See [Custom clients & primitives](/docs/guides/custom-clients/).

@@ -1,0 +1,126 @@
+---
+title: Quickstart
+description: Install parry, add one line, and watch your first cache hit, in about five minutes.
+---
+
+import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+<Steps>
+
+1. **Install the package**
+
+   ```bash
+   pip install llm-parry
+   ```
+
+   The package is called `llm-parry` on PyPI, and you import it as `parry`. It
+   has no required dependencies and hooks whichever SDKs you already have
+   installed.
+
+2. **Add one line at startup**
+
+   ```python ins={2}
+   import parry
+   parry.install()
+   ```
+
+   Put it anywhere that runs once, such as `main()`, an app factory or the top
+   of a notebook. Clients created before *and* after this line are covered.
+
+3. **Make the same call twice**
+
+   <Tabs syncKey="provider">
+   <TabItem label="OpenAI">
+   ```python
+   import time
+   import openai
+   import parry
+
+   parry.install()
+   client = openai.OpenAI()
+
+   for i in range(3):
+       t = time.perf_counter()
+       r = client.chat.completions.create(
+           model="gpt-4o-mini",
+           messages=[{"role": "user", "content": "Say hi in five words."}],
+       )
+       print(f"{(time.perf_counter() - t) * 1000:7.1f} ms  {r.choices[0].message.content}")
+
+   print(parry.stats().summary())
+   ```
+   </TabItem>
+   <TabItem label="Anthropic">
+   ```python
+   import time
+   import anthropic
+   import parry
+
+   parry.install()
+   client = anthropic.Anthropic()
+
+   for i in range(3):
+       t = time.perf_counter()
+       r = client.messages.create(
+           model="claude-haiku-5-5",
+           max_tokens=100,
+           messages=[{"role": "user", "content": "Say hi in five words."}],
+       )
+       print(f"{(time.perf_counter() - t) * 1000:7.1f} ms  {r.content[0].text}")
+
+   print(parry.stats().summary())
+   ```
+   </TabItem>
+   </Tabs>
+
+   ```text title="output"
+     612.4 ms  Hi there, how are you?
+       0.4 ms  Hi there, how are you?
+       0.1 ms  Hi there, how are you?
+   requests        3
+   cache           2 hits / 1 misses (67%), 46 tokens and $0.000011 saved
+   spend           $0.000006 this session (18 in / 5 out tokens)
+   rate limiting   0 delayed, 0 rejected
+   retries         0   budget stops 0
+     openai:gpt-4o-mini                            1 req  $0.000006
+   ```
+
+   The first call went to the provider. The next two came from parry's cache:
+   no network, no cost, and no rate-limit capacity used.
+
+4. **Optional: set a budget**
+
+   ```python
+   parry.install(max_cost_usd=5.00)
+   ```
+
+   Once this session has spent $5, every call that isn't cached raises
+   `parry.BudgetExceeded` *before* it leaves your process.
+
+5. **Optional: keep everything across restarts**
+
+   ```python
+   parry.install(storage="parry.db")
+   ```
+
+   ```bash
+   parry stats --db parry.db
+   ```
+
+</Steps>
+
+## Turning it off
+
+| You want | Do |
+|---|---|
+| parry off for one block | `with parry.bypass(): ...` |
+| no caching at all | `parry.install(cache=False)` |
+| parry in one block only | `with parry.Parry() as guard: ...` instead of `install()` |
+| parry on one client only | `client = parry.wrap(openai.OpenAI())` |
+| undo everything | `parry.uninstall()` |
+
+<Aside title="Identical requests return identical answers">
+Caching is on by default, so the same request returns the same cached answer
+even at `temperature=1`. If you need varied samples, turn caching off for that
+code path with `parry.bypass()` or `cache=False`. See [Response caching](/docs/features/caching/).
+</Aside>

@@ -1,0 +1,115 @@
+---
+title: Rate limiting
+description: Per-model token buckets with provider tier-1 defaults, wait or raise semantics, burst control and tokens-per-minute limits.
+---
+
+import TokenBucketSim from '../../../../components/docs/TokenBucketSim.astro';
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+parry gives every `provider:model` pair its own **token bucket** (GCRA, via
+the [governor](https://github.com/boinkor-net/governor) crate). When a bucket
+is empty, parry either **waits** for a slot or **raises** `parry.RateLimited`,
+before the request reaches the provider. The point is to space requests out
+so the provider has no reason to send a 429.
+
+```python
+guard = parry.install()
+guard.set_rate_limit("gpt-4o", requests_per_minute=60)
+guard.set_rate_limit("gpt-4o-mini", requests_per_minute=500, tokens_per_minute=200_000)
+```
+
+<TokenBucketSim />
+
+## How the bucket behaves
+
+- The bucket holds `burst` slots. `burst` defaults to the per-minute rate.
+- It refills **continuously** at `requests_per_minute / 60` slots per second.
+- With `requests_per_minute=60`, 60 back-to-back calls go straight through and
+  the 61st waits about one second.
+- **Cache hits never consume a slot.**
+- Each retry takes a fresh slot, because a retry is a new request to the provider.
+
+## Wait or raise
+
+<Tabs>
+<TabItem label='"wait" (default)'>
+```python
+parry.install(on_rate_limit="wait", max_wait=60.0)
+```
+parry sleeps until a slot frees up, using `time.sleep` on sync clients and
+`await asyncio.sleep` on async ones. If the wait would go past `max_wait`
+seconds in total, it raises `parry.RateLimited` instead.
+</TabItem>
+<TabItem label='"raise"'>
+```python
+parry.install(on_rate_limit="raise")
+
+try:
+    client.chat.completions.create(...)
+except parry.RateLimited as e:
+    print(e.provider, e.model, e.retry_after)   # seconds until a slot frees
+```
+Use this when you would rather shed load, or queue the work yourself, than
+block.
+</TabItem>
+</Tabs>
+
+## Choosing which models a rule covers
+
+```python
+guard.set_rate_limit("gpt-4o", requests_per_minute=60)                  # one model, any provider
+guard.set_rate_limit("gpt-4o", requests_per_minute=60, provider="openai")  # one provider + model
+guard.set_rate_limit("anthropic:*", requests_per_minute=1_000)           # every Anthropic model
+guard.set_rate_limit("*", requests_per_minute=100)                       # everything else
+guard.set_rate_limit("gpt-4o")                                           # no limits: unlimited
+guard.remove_rate_limit("gpt-4o")                                        # fall back to the next rule
+```
+
+For each call, the first rule that matches wins:
+
+1. `provider:model`
+2. `model`
+3. `provider:*`
+4. `*`
+5. the built-in default for the provider
+
+A rule is a **template**. Every concrete `provider:model` that matches
+`"openai:*"` gets its *own* bucket, because providers enforce limits per
+model.
+
+## Built-in defaults
+
+| Provider | Default | Source |
+|---|---|---|
+| OpenAI | 500 requests / minute per model | published usage tier 1 |
+| Anthropic | 50 requests / minute per model | published tier 1 |
+| anything else | unlimited | |
+
+If your account is on a higher tier, raise these:
+
+```python
+guard.set_rate_limit("openai:*", requests_per_minute=10_000)
+```
+
+## Tokens per minute
+
+```python
+guard.set_rate_limit("gpt-4o", tokens_per_minute=30_000)
+```
+
+A TPM limit counts each request's **estimated prompt tokens plus its
+`max_tokens`**, which is a conservative upper bound. A single request larger
+than the whole per-minute budget is let through rather than left waiting
+forever.
+
+Inspect the rule that applies to a model:
+
+```python
+guard.rate_limit_for("openai", "gpt-4o")
+# {'requests_per_minute': 60, 'tokens_per_minute': None, 'burst': None}
+```
+
+<Aside type="note">
+Limits are **per process**. If several workers share one API key, divide the
+provider's limit between them, or coordinate through a gateway.
+</Aside>

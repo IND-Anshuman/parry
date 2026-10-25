@@ -1,0 +1,101 @@
+---
+title: Configuration
+description: Every Parry() and install() option, its default, and what it does.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every option has a default. You only need this page when the defaults don't
+fit.
+
+## `Parry(...)`
+
+```python
+from parry import Parry
+
+guard = Parry(
+    cache=True,
+    cache_ttl=3600,
+    cache_size=10_000,
+    rate_limit=True,
+    on_rate_limit="wait",
+    max_wait=60.0,
+    cost_tracking=True,
+    max_cost_usd=None,
+    retry=True,
+    max_attempts=3,
+    retry_base_delay=0.5,
+    retry_max_delay=30.0,
+    storage=None,
+)
+```
+
+| Option | Type | Default | Meaning |
+|---|---|---|---|
+| `cache` | `bool` | `True` | serve identical requests from the cache |
+| `cache_ttl` | `float \| None` | `3600` | seconds an entry lives. `None` means it lives until evicted by size |
+| `cache_size` | `int` | `10_000` | maximum number of entries. The cache is **always** bounded, so `None` or `0` raises `ValueError` |
+| `rate_limit` | `bool` | `True` | apply per-model token buckets |
+| `on_rate_limit` | `"wait" \| "raise"` | `"wait"` | sleep until a slot frees, or raise `RateLimited` immediately |
+| `max_wait` | `float` | `60.0` | in `"wait"` mode, raise `RateLimited` once waiting would exceed this many seconds |
+| `cost_tracking` | `bool` | `True` | record spend in the ledger |
+| `max_cost_usd` | `float \| None` | `None` | hard budget for this guard's session. See [Budgets](/docs/features/budgets/) |
+| `retry` | `bool` | `True` | retry transient failures |
+| `max_attempts` | `int` | `3` | total attempts, **including** the first |
+| `retry_base_delay` | `float` | `0.5` | first backoff delay in seconds. It doubles on each attempt, with equal jitter |
+| `retry_max_delay` | `float` | `30.0` | cap for any single delay, including server `Retry-After` values |
+| `storage` | `str \| Path \| None` | `None` | SQLite file for a persistent cache and ledger |
+
+`cache`, `rate_limit`, `cost_tracking`, `retry`, `max_cost_usd`,
+`on_rate_limit` and `max_wait` are plain attributes, so you can change them
+at runtime:
+
+```python
+guard.cache = False
+guard.max_cost_usd = 25.0
+```
+
+## `parry.install(...)`
+
+```python
+parry.install(guard=None, *, sync=True, async_=True, openai=True, anthropic=True, **options)
+```
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `guard` | `None` | install this `Parry` instead of creating one |
+| `sync` | `True` | hook sync clients |
+| `async_` | `True` | hook async clients (`parry.install_async()` hooks async only) |
+| `openai` | `True` | hook the OpenAI SDK |
+| `anthropic` | `True` | hook the Anthropic SDK |
+| `**options` | | passed to `Parry(...)` when a new guard is created |
+
+## Per-model settings
+
+```python
+guard.set_rate_limit(model, requests_per_minute=None, tokens_per_minute=None, *, burst=None, provider=None)
+guard.remove_rate_limit(model, *, provider=None)
+guard.set_pricing(model, input_per_million, output_per_million)
+```
+
+See [Rate limiting](/docs/features/rate-limiting/) and
+[Cost tracking](/docs/features/cost-tracking/).
+
+## Cache backend
+
+```python
+guard.set_cache("memory")                    # default
+guard.set_cache("sqlite", path="parry.db")
+guard.storage("parry.db")                    # same as the line above
+```
+
+<Aside type="note">
+`set_cache("redis", ...)` is not in v0.1. A shared cache across processes is
+planned for a later release. Any other backend name raises `ValueError`.
+</Aside>
+
+## Environment
+
+parry reads **no** environment variables and no config files. Everything is
+set in code. Your SDKs keep reading their own variables as usual
+(`OPENAI_API_KEY`, `ANTHROPIC_BASE_URL`, …).

@@ -1,0 +1,113 @@
+---
+title: Custom clients & primitives
+description: Guard calls parry doesn't hook, using the guard's building blocks, and use the Rust primitives on their own.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Guarding any client
+
+If a library calls `chat.completions.create`, `responses.create` or
+`messages.create` on the official SDKs, `install()` already covers it. That
+includes OpenAI-compatible servers such as vLLM, Ollama and LM Studio reached
+through `openai.OpenAI(base_url=...)`. For anything else, put the guard's
+building blocks around your own call:
+
+<Tabs>
+<TabItem label="sync">
+```python
+import parry
+
+guard = parry.get_guard() or parry.install()
+
+def generate(prompt: str) -> str:
+    guard.check_budget("my-model", prompt_tokens=parry.count_tokens(prompt, "my-model"))
+    guard.acquire("myprovider", "my-model")            # waits, or raises RateLimited
+    response = my_client.generate(prompt)
+    guard.record_usage("myprovider", "my-model", response.in_tokens, response.out_tokens)
+    return response.text
+```
+</TabItem>
+<TabItem label="async">
+```python
+async def generate(prompt: str) -> str:
+    guard.check_budget("my-model")
+    await guard.acquire_async("myprovider", "my-model")
+    response = await my_client.generate(prompt)
+    guard.record_usage("myprovider", "my-model", response.in_tokens, response.out_tokens)
+    return response.text
+```
+</TabItem>
+</Tabs>
+
+Price the model so the budget can see its spend:
+
+```python
+guard.set_pricing("my-model", input_per_million=0.5, output_per_million=1.5)
+guard.set_rate_limit("my-model", requests_per_minute=120, provider="myprovider")
+```
+
+## The Rust primitives
+
+Everything parry does is built from four thread-safe Rust types and two
+functions, which you can use directly.
+
+<Tabs>
+<TabItem label="Cache">
+```python
+from parry import Cache
+
+cache = Cache(max_entries=1_000, ttl_seconds=600)
+key = Cache.make_key("my-namespace", '{"model": "x", "prompt": "hi"}')  # blake3 of canonical JSON
+cache.set(key, "serialised value", tokens=42, cost_usd=0.0003)
+cache.get(key)            # 'serialised value'
+cache.lookup(key)         # ('serialised value', 42, 0.0003)
+cache.stats()             # {'hits': 2, 'misses': 0, 'entries': 1, ...}
+```
+</TabItem>
+<TabItem label="RateLimit">
+```python
+from parry import RateLimit
+
+rl = RateLimit()
+rl.set_limit("my-model", requests_per_minute=60, burst=10)
+rl.try_acquire("p", "my-model")            # 0.0 = go, otherwise seconds to wait
+rl.acquire("p", "my-model", timeout=5.0)   # blocks with the GIL released; False on timeout
+rl.limit_for("p", "my-model")
+```
+</TabItem>
+<TabItem label="Cost">
+```python
+from parry import Cost
+
+cost = Cost()
+cost.compute("gpt-4o", input_tokens=1_200, output_tokens=300)   # 0.006
+cost.price("claude-opus-5-5")                                   # (4.0, 20.0)
+cost.record("openai", "gpt-4o", 1_200, 300)
+cost.totals(), cost.by_model()
+Cost.pricing_table()
+```
+</TabItem>
+<TabItem label="Retry">
+```python
+from parry import Retry
+
+retry = Retry(max_attempts=5, base_delay=0.25, max_delay=10)
+retry.call(fetch, url, timeout=3)           # retries transient errors only
+retry.classify(exc)                         # (retryable, retry_after_seconds)
+retry.delay(3, retry_after=None)
+```
+</TabItem>
+<TabItem label="Tokens">
+```python
+from parry import count_tokens, estimate_tokens
+
+count_tokens("Hello, world!", "gpt-4o")                     # 4
+estimate_tokens('{"messages": [{"role": "user", "content": "hi"}]}', "gpt-4o")
+```
+OpenAI models get their real tiktoken encoding. Other models, including
+Anthropic's (whose tokenizer is not public), get `o200k_base` as an
+approximation. Counts are only used for **estimates**. Real usage from the
+provider always wins.
+</TabItem>
+</Tabs>

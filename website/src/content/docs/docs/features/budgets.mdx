@@ -1,0 +1,71 @@
+---
+title: Budgets
+description: A hard spend limit that stops requests before they are sent, how the pre-flight estimate works, and its exact guarantees.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+```python
+parry.install(max_cost_usd=10.00)
+```
+
+Once this guard has spent $10, every call that isn't already cached raises
+`parry.BudgetExceeded` **before the request leaves your process**. Cache hits
+are free, so they are always served.
+
+```python
+try:
+    client.chat.completions.create(model="gpt-4o", messages=msgs)
+except parry.BudgetExceeded as e:
+    print(f"stopped at ${e.spent_usd:.4f} of ${e.limit_usd:.2f}")
+    print(f"next call to {e.model} was estimated at ${e.estimate_usd:.6f}")
+```
+
+## How the check works
+
+<Steps>
+
+1. Before each uncached call, parry reads the session spend from the ledger.
+2. It estimates the prompt's input cost: a tiktoken count of the prompt text,
+   priced at the model's input rate.
+3. If `spent >= max_cost_usd` **or** `spent + estimate > max_cost_usd`, it
+   raises `BudgetExceeded` and counts it in `stats.budget_rejections`.
+4. Otherwise the call goes ahead. Its real cost, output included, is recorded
+   when the response arrives.
+
+</Steps>
+
+The call that crosses the line, usually because of its output, is allowed to
+finish, since it has already been paid for. Every call after it is refused.
+
+## Guarantees and limits
+
+| Guarantee | Detail |
+|---|---|
+| No call **starts** after the limit is reached | checked before rate limiting and before the network |
+| The overshoot is at most one call per thread | concurrent threads can each have one call in flight when the line is crossed |
+| Cache hits are always served | they cost nothing |
+| Unpriced models are invisible to the budget | add a price with `guard.set_pricing(...)` |
+| The scope is the guard's session | `guard.reset_stats()` restarts the budget |
+
+<Aside type="caution" title="Budgets and persistence">
+`max_cost_usd` covers the current guard session, not lifetime spend stored in
+SQLite. For a daily cap, compare `stats.today_cost_usd` yourself, or create a
+fresh guard each day.
+</Aside>
+
+## Changing the budget at runtime
+
+```python
+guard = parry.get_guard()
+guard.max_cost_usd = 25.0     # raise it
+guard.max_cost_usd = None     # remove it
+```
+
+## Using the budget without the hooks
+
+```python
+guard.check_budget("gpt-4o", prompt_tokens=parry.count_tokens(prompt, "gpt-4o"))
+```
+
+The LangChain and LlamaIndex handlers call this before every LLM event.

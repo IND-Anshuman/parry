@@ -1,0 +1,37 @@
+---
+title: Changelog
+description: Release history for parry.
+---
+
+import { Badge } from '@astrojs/starlight/components';
+
+## 0.1.0 <Badge text="2026-10-25" variant="tip" />
+
+The first release. See also [CHANGELOG.md](https://github.com/IND-Anshuman/parry/blob/main/CHANGELOG.md) and [GitHub releases](https://github.com/IND-Anshuman/parry/releases).
+
+**Hooks**
+- `parry.install()` hooks OpenAI chat completions, the OpenAI Responses API,
+  Anthropic messages and Anthropic beta messages, on sync and async clients,
+  including `.with_raw_response` and `stream=True`.
+
+**Guard**
+- Response cache: a blake3 key over the canonicalised semantic request, a
+  bounded moka LRU with TTL, and optional SQLite persistence.
+- Per-model token-bucket rate limiting with tier-1 defaults, `"wait"` or
+  `"raise"` semantics, burst and tokens-per-minute limits.
+- Cost tracking from a dated pricing table, matched by longest prefix, with
+  per-model and per-day totals.
+- `max_cost_usd` budget, checked before each request is sent.
+- Retry with exponential backoff, equal jitter and `Retry-After`.
+
+**Scoping**
+- `with Parry():`, `parry.wrap(client)`, `parry.bypass()`.
+
+**Integrations**
+- LangChain `ParryCallback` and LlamaIndex `ParryHandler`.
+
+**Tooling**
+- The `parry stats` and `parry pricing` CLI.
+- Standalone Rust primitives: `Cache`, `RateLimit`, `Cost`, `Retry`,
+  `count_tokens` and `estimate_tokens`.
+- Published on PyPI as `llm-parry` and imported as `parry`.

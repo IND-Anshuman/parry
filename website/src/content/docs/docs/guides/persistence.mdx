@@ -1,0 +1,76 @@
+---
+title: Persistence & CLI
+description: Keep the cache and the spend ledger across restarts with SQLite, and report on it with the parry CLI.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+By default everything lives in memory and disappears when the process exits.
+Add a SQLite file to keep both the **cache** and the **spend ledger**:
+
+```python
+parry.install(storage="parry.db")
+# or, on an existing guard:
+guard.storage("parry.db")
+guard.set_cache("sqlite", path="parry.db")
+guard.set_cache("memory")            # back to memory only
+parry.storage("parry.db")            # configure the global guard
+```
+
+## What gets stored
+
+| Table | Contents |
+|---|---|
+| `cache` | key, serialised response, tokens, cost and expiry (from `cache_ttl`) |
+| `ledger` | one row per call: timestamp, provider, model, input/output tokens, cost, whether it was estimated |
+
+Lookups go to memory first and SQLite second. A hit from SQLite is copied
+back into memory. Expired rows are removed on read, and stale or excess rows
+are trimmed periodically.
+
+With storage on, stats gain two fields:
+
+```python
+s = guard.stats
+s.today_cost_usd      # since local midnight
+s.lifetime_cost_usd   # everything in the file
+```
+
+## The `parry` CLI
+
+```bash
+parry stats --db parry.db
+```
+
+```text
+lifetime  $3.1842  1204 requests  2311040 in / 401229 out
+today     $0.4210  163 requests
+
+  openai:gpt-4o-mini                              980 req  $    0.5912
+  anthropic:claude-opus-5-5                       224 req  $    2.5930
+```
+
+```bash
+parry stats --db parry.db --json        # machine-readable
+parry pricing                           # the built-in pricing table
+parry pricing --provider anthropic --json
+parry --version
+```
+
+`python -m parry ...` works the same way.
+
+## Failure behaviour
+
+<Aside type="note" title="Storage never takes your app down">
+If the file is corrupt, locked, read-only or on a full disk, parry logs **one**
+warning ("continuing in memory only") and carries on with the in-memory cache
+and ledger. Your calls are never affected.
+</Aside>
+
+- The database uses WAL mode where available and is safe to read with the CLI
+  while your app writes to it.
+- One file per process is the intended use. Several processes *can* share a
+  file, since SQLite serialises the writes, but rate limits stay per process.
+- Cache entries are only reloaded into objects from the `openai.*` and
+  `anthropic.*` packages. A tampered file can't make parry import arbitrary
+  modules.

@@ -1,0 +1,82 @@
+---
+title: Stats & logging
+description: Read parry's counters, print a summary, and turn on debug logging without leaking prompts.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+## Stats
+
+`guard.stats` (or `parry.stats()` for the active guard) returns a frozen
+`ParryStats` snapshot. It is cheap to take and safe to keep.
+
+```python
+s = parry.stats()
+print(s)            # ParryStats(cache_hits=47, cache_misses=12, tokens_cached=8421, total_cost_usd=0.234000, ...)
+print(s.summary())  # multi-line human-readable report
+```
+
+| Field | Meaning |
+|---|---|
+| `requests` | calls the guard handled, including cache hits |
+| `cache_hits`, `cache_misses`, `cache_hit_rate` | lookups for non-streaming requests |
+| `tokens_cached`, `cost_saved_usd` | what the hits would have used and cost |
+| `total_cost_usd`, `input_tokens`, `output_tokens` | session spend |
+| `by_model` | `{"provider:model": {requests, input_tokens, output_tokens, cost_usd, ...}}`, most expensive first |
+| `requests_blocked` | calls that had to wait for a rate-limit slot |
+| `rate_limit_rejections` | calls refused with `RateLimited` |
+| `budget_rejections` | calls refused with `BudgetExceeded` |
+| `retries`, `errors` | retry attempts, and calls that failed after all of them |
+| `unpriced_requests` | calls to models missing from the pricing table |
+| `estimated_requests` | calls whose usage was estimated (for example OpenAI streams without usage) |
+| `today_cost_usd`, `lifetime_cost_usd` | from SQLite storage; `None` without it |
+
+```python
+guard.reset_stats()   # zero the counters and session spend (restarts the budget)
+```
+
+## Logging
+
+parry logs to the standard `parry` logger and is silent by default. It adds
+a `NullHandler`.
+
+```python
+import logging
+logging.basicConfig()
+logging.getLogger("parry").setLevel(logging.DEBUG)
+```
+
+```text
+DEBUG:parry:parry: hooked openai.resources.chat.completions.completions.Completions.create
+DEBUG:parry:parry: openai:gpt-4o-mini 10 in / 5 out tokens, $0.000005
+DEBUG:parry:parry: cache hit openai:gpt-4o-mini
+DEBUG:parry:parry: retrying after RateLimitError in 0.61s (attempt 2)
+```
+
+| Level | What gets logged |
+|---|---|
+| `DEBUG` | one line per call (model, tokens, cost, estimated or not), cache hits, retries, hooks applied |
+| `WARNING` | unpriced models (once each), storage failures, bookkeeping errors |
+
+<Aside type="tip" title="No prompts in logs, ever">
+parry logs metadata only: model, token counts, cost and latency. Request and
+response bodies are **never** logged at any level, so you can turn on `DEBUG`
+in production without leaking user data.
+</Aside>
+
+## A periodic report
+
+```python
+import threading, time, parry
+
+def report(every=60):
+    while True:
+        time.sleep(every)
+        s = parry.stats()
+        print(f"[parry] ${s.total_cost_usd:.4f} spent, {s.cache_hit_rate:.0%} cache hits")
+
+threading.Thread(target=report, daemon=True).start()
+```
+
+For a live, refreshing view of a SQLite ledger, see
+[`examples/cost_dashboard.py`](https://github.com/IND-Anshuman/parry/blob/main/examples/cost_dashboard.py) in the repository.

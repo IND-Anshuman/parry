@@ -1,0 +1,82 @@
+---
+title: Introduction
+description: parry is a zero-config guard rail for LLM calls. It adds caching, rate limiting, cost tracking, budgets and retries to the OpenAI and Anthropic SDKs with one line.
+---
+
+import { Card, CardGrid, LinkCard, Aside } from '@astrojs/starlight/components';
+import DocsHero from '../../../components/docs/DocsHero.astro';
+import { url as siteUrl } from '../../../data/site';
+
+<DocsHero />
+
+```python
+import parry
+parry.install()   # every OpenAI / Anthropic call is now guarded
+```
+
+**parry** sits between your code and the SDKs you already use. It doesn't wrap
+your client in a new API, ask you for a config file, or need Redis. It hooks
+the SDK's own `create()` methods, so existing code keeps working, including
+code inside LangChain and LlamaIndex.
+
+## The aim
+
+LLM apps tend to fail in the same boring, expensive ways. They pay twice for
+identical prompts, hit 429 storms during batch jobs, and run up bills nobody
+noticed. The fixes are well known but tedious, so every project rewrites the
+same glue code, or skips it.
+
+parry's aim is to **make the safe path the default path**:
+
+- **Zero config.** One line at startup, with sensible defaults for every feature.
+- **No rewrites.** Your call sites, types and frameworks stay exactly as they are.
+- **No lock-in.** Remove the line and you're back on the plain SDK. There's no new client to migrate off.
+- **No infrastructure.** Everything runs in-process. Persistence is an optional SQLite file.
+
+## What you get
+
+<CardGrid>
+  <Card title="Response caching" icon="star">
+    Identical requests come back from a bounded LRU in about 10 µs, for $0. [Caching →](/docs/features/caching/)
+  </Card>
+  <Card title="Per-model rate limits" icon="setting">
+    A token bucket for each `provider:model`, with tier-1 defaults. [Rate limiting →](/docs/features/rate-limiting/)
+  </Card>
+  <Card title="Cost tracking" icon="list-format">
+    Exact usage priced from a dated table, broken down per model and per day. [Cost tracking →](/docs/features/cost-tracking/)
+  </Card>
+  <Card title="Hard budgets" icon="warning">
+    `BudgetExceeded` is raised *before* the request that would cross your limit. [Budgets →](/docs/features/budgets/)
+  </Card>
+  <Card title="Retries that behave" icon="random">
+    Backoff with jitter, `Retry-After`, and no retries on 4xx. [Retries →](/docs/features/retries/)
+  </Card>
+  <Card title="Streaming & async" icon="rocket">
+    Streams pass through untouched and are metered. A finished stream fills the cache. [Streaming →](/docs/features/streaming/)
+  </Card>
+</CardGrid>
+
+## What it covers
+
+| SDK / framework | Covered by `install()` |
+|---|---|
+| `openai` | `chat.completions.create`, `responses.create`, sync and async, `stream=True`, `.with_raw_response` |
+| `anthropic` | `messages.create`, `beta.messages.create`, sync and async, `stream=True`, `.with_raw_response` |
+| LangChain | `ChatOpenAI`, `ChatAnthropic` (they call the SDKs above), plus `ParryCallback` for anything else |
+| LlamaIndex | `OpenAI`, `Anthropic` LLMs, plus `ParryHandler` for event-level guarding |
+
+<Aside type="tip" title="Is parry right for you?">
+parry is built for a single process: scripts, notebooks, eval runs, workers and
+single-replica services. If several processes or hosts need to share a cache and
+rate limits, put a shared cache and an API gateway in front of the provider
+instead. See the [FAQ](/docs/faq/).
+</Aside>
+
+## Next steps
+
+<CardGrid>
+  <LinkCard title="Quickstart" description="From pip install to your first cache hit in five minutes." href={siteUrl('docs/quickstart/')} />
+  <LinkCard title="How it works" description="What happens, step by step, on every call." href={siteUrl('docs/how-it-works/')} />
+  <LinkCard title="Configuration" description="Every option, with its default." href={siteUrl('docs/reference/configuration/')} />
+  <LinkCard title="Integrations" description="LangChain and LlamaIndex, globally or per chain." href={siteUrl('docs/guides/langchain/')} />
+</CardGrid>

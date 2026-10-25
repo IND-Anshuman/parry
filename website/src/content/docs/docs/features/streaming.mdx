@@ -1,0 +1,87 @@
+---
+title: Streaming
+description: How parry meters streams without changing them, where usage comes from, and how a finished stream fills the cache.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Streams pass through **untouched**. You get the SDK's own `Stream` or
+`AsyncStream` object, with the same type, the same attributes, and the same
+context-manager behaviour. parry watches the events go by.
+
+```python
+stream = client.chat.completions.create(model="gpt-4o", messages=msgs, stream=True)
+assert type(stream) is openai.Stream      # still the SDK's object
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="")
+```
+
+## What parry does with a stream
+
+| Stage | Behaviour |
+|---|---|
+| Before | budget check and rate-limit slot, as for any call. The cache is **not** read |
+| During | each event is fed to an accumulator as you consume it |
+| Fully consumed | usage is recorded. A text-only result is rebuilt and **cached** |
+| Closed early / error | the usage seen so far is recorded. Nothing is cached |
+
+Because a finished stream fills the cache, the next identical
+**non-streaming** call is a hit:
+
+```python
+list(client.chat.completions.create(model="gpt-4o", messages=msgs, stream=True))
+r = client.chat.completions.create(model="gpt-4o", messages=msgs)   # cache hit
+```
+
+## Where usage comes from
+
+<Tabs>
+<TabItem label="Anthropic">
+Anthropic always sends usage in `message_start` and `message_delta`, so
+streamed costs are **exact**.
+</TabItem>
+<TabItem label="OpenAI chat">
+OpenAI only includes usage when you ask for it:
+
+```python
+client.chat.completions.create(
+    model="gpt-4o", messages=msgs, stream=True,
+    stream_options={"include_usage": True},
+)
+```
+
+Without it, parry **estimates** usage with tiktoken (prompt plus streamed
+text) and counts the call in `stats.estimated_requests`. parry never adds
+`stream_options` itself, because that would change the chunks your code
+receives.
+</TabItem>
+<TabItem label="OpenAI Responses">
+The `response.completed` event carries the full response with usage, so
+streamed costs are exact and the completed response is cached as is.
+</TabItem>
+</Tabs>
+
+## Async
+
+```python
+stream = await aclient.messages.create(model="claude-opus-5-5", max_tokens=512,
+                                       messages=msgs, stream=True)
+async with stream:
+    async for event in stream:
+        ...
+```
+
+## How the metering works
+
+The SDKs' stream objects read from a private iterator. parry swaps in an
+iterator that feeds each event to an accumulator, and wraps `close()`.
+Returning the SDK's own object matters: some SDK versions define an
+`isinstance` hook that rejects anything but the exact class, so a proxy
+object would break type checks. If a stream object ever lacks that iterator,
+parry falls back to a transparent proxy.
+
+<Aside type="caution" title="Not covered">
+The `client.messages.stream(...)` and `client.beta.chat.completions.stream(...)`
+**helpers** don't go through `create()`, so they aren't intercepted in v0.1.
+`create(stream=True)` is fully covered.
+</Aside>

@@ -1,0 +1,96 @@
+---
+title: Installation
+description: Install llm-parry from PyPI or build it from source. Supported Python versions, platforms, extras and SDK versions.
+---
+
+import { Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+## From PyPI
+
+<Tabs>
+<TabItem label="pip">
+```bash
+pip install llm-parry
+```
+</TabItem>
+<TabItem label="uv">
+```bash
+uv add llm-parry
+```
+</TabItem>
+<TabItem label="poetry">
+```bash
+poetry add llm-parry
+```
+</TabItem>
+</Tabs>
+
+The distribution is called **`llm-parry`**. The module you import, and the
+CLI command, are both **`parry`**.
+
+parry ships as one `abi3` wheel per platform, so a single wheel works on
+Python 3.10, 3.11, 3.12, 3.13 and 3.14. Wheels are built for:
+
+| OS | Architectures |
+|---|---|
+| Linux (manylinux, musllinux) | x86-64, aarch64 |
+| macOS | x86-64, Apple silicon |
+| Windows | x64 |
+
+## Extras
+
+parry has **no required dependencies**. It hooks whichever SDKs are
+importable. The extras are a convenient way to install them alongside:
+
+```bash
+pip install "llm-parry[openai]"       # + openai
+pip install "llm-parry[anthropic]"    # + anthropic
+pip install "llm-parry[langchain]"    # + langchain-core
+pip install "llm-parry[llamaindex]"   # + llama-index-core
+```
+
+## Supported SDK versions
+
+| Package | Tested range |
+|---|---|
+| `openai` | 1.82 → 2.x |
+| `anthropic` | 0.52 → 2.x |
+| `langchain-openai` / `langchain-anthropic` | current |
+| `llama-index-core` / `llama-index-llms-openai` | current |
+
+CI runs the full suite against the newest releases *and* a pinned older pair,
+so SDK changes that break a hook show up as test failures, not in your app.
+
+## From source
+
+You need a Rust toolchain (the version is pinned in `rust-toolchain.toml`, and
+rustup picks it up automatically) and Python 3.10+.
+
+Install the latest `main` straight from GitHub:
+
+```bash
+pip install "git+https://github.com/IND-Anshuman/parry.git"
+```
+
+Or clone it for development:
+
+```bash
+git clone https://github.com/IND-Anshuman/parry.git
+cd parry
+python -m venv .venv && source .venv/bin/activate
+pip install maturin
+pip install -e ".[dev,integrations]"   # builds the Rust extension
+pytest
+```
+
+<Aside type="note">
+After changing Rust code, rebuild with `maturin develop`. Add `--release` before
+benchmarking, because debug builds are several times slower.
+</Aside>
+
+## Verify the install
+
+```bash
+python -c "import parry; print(parry.__version__)"
+parry pricing --provider anthropic
+```

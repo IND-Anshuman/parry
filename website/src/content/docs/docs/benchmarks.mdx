@@ -1,0 +1,59 @@
+---
+title: Benchmarks
+description: How much latency parry adds to an LLM call, measured with the real OpenAI SDK.
+---
+
+import BenchTable from '../../../components/docs/BenchTable.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+parry's hot path is in Rust: canonicalising and hashing the request, the LRU
+lookup, the token bucket and the ledger. The Python layer only moves SDK
+objects around.
+
+<BenchTable />
+
+## Method
+
+[`benches/overhead_bench.py`](https://github.com/IND-Anshuman/parry/blob/main/benches/overhead_bench.py) drives the **real OpenAI SDK** through an
+in-memory `httpx.MockTransport`. No network is involved, so the gap between
+the rows is the cost of parry plus SDK work and nothing else.
+
+- **Baseline**: a plain `client.chat.completions.create(...)`.
+- **Cache miss**: the same call with parry installed and a unique prompt each
+  time. It includes hashing, a rate-limit check, the ledger update, and
+  serialising the response into the cache.
+- **Cache hit**: an identical request answered from cache. No HTTP request is
+  built at all.
+
+Each figure is the median of five batches, measured after a warm-up, on a
+release build.
+
+```bash
+pip install maturin openai
+maturin develop --release
+python benches/overhead_bench.py --n 5000
+```
+
+<Aside type="note" title="Put the numbers in context">
+A real API call takes hundreds of milliseconds to tens of seconds. An overhead
+of about 65 µs is roughly 0.01 % of a fast 600 ms completion. A cache hit
+replaces the entire call.
+</Aside>
+
+## Where the time goes on a miss
+
+parry's own work on a miss, measured in isolation on a release build, is about
+**27 µs**. The individual steps for a short chat request (20,000 iterations each):
+
+| Step | Measured |
+|---|---|
+| Serialise the semantic kwargs to JSON (Python) | 2.6 µs |
+| Canonicalise and hash with blake3 (Rust, GIL released) | 1.6 µs |
+| LRU lookup + token bucket + ledger update (Rust) | 2.3 µs |
+| Serialise the response for the cache (pydantic) | 2.7 µs |
+
+That leaves about 18 µs of Python orchestration: the hook itself, building the
+per-call context, and the stats counters. Larger prompts and responses make
+the serialisation steps grow roughly linearly. The end-to-end gap against the
+baseline is larger than 27 µs because it also includes allocator and garbage
+collector effects from the extra objects.

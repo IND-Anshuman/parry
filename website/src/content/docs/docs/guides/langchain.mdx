@@ -1,0 +1,93 @@
+---
+title: LangChain
+description: Use parry with LangChain, either globally through install() (caching included) or per model and chain with ParryCallback.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+## Option 1: `install()` (recommended)
+
+`langchain-openai` and `langchain-anthropic` call the official SDKs, so
+`parry.install()` covers them completely, **caching included**, for `invoke`,
+`ainvoke`, `stream`, `astream` and `batch`.
+
+<Tabs syncKey="provider">
+<TabItem label="ChatOpenAI">
+```python
+import parry
+from langchain_openai import ChatOpenAI
+
+parry.install()
+llm = ChatOpenAI(model="gpt-4o-mini")
+llm.invoke("What is a token bucket?")
+llm.invoke("What is a token bucket?")   # cache hit, no network
+```
+</TabItem>
+<TabItem label="ChatAnthropic">
+```python
+import parry
+from langchain_anthropic import ChatAnthropic
+
+parry.install()
+llm = ChatAnthropic(model="claude-haiku-5-5")
+llm.invoke("hello")
+llm.invoke("hello")                     # cache hit
+```
+</TabItem>
+</Tabs>
+
+A whole chain works the same way:
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+chain = ChatPromptTemplate.from_template("Explain {topic} in one line") | llm | StrOutputParser()
+chain.invoke({"topic": "GCRA"})
+```
+
+<Aside type="note">
+`ChatOpenAI` fetches every response through `.with_raw_response` so that it
+can read headers. parry handles that path, and a cache hit returns a
+`CachedRawResponse` that LangChain parses normally.
+</Aside>
+
+## Option 2: `ParryCallback`
+
+Use the callback for chat models from other providers, or when you don't want
+global hooks.
+
+```python
+from parry import Parry
+from parry.integrations.langchain import ParryCallback
+
+guard = Parry(max_cost_usd=5)
+guard.set_rate_limit("gpt-4o-mini", requests_per_minute=100)
+
+llm = ChatOpenAI(model="gpt-4o-mini", callbacks=[ParryCallback(guard)])
+# or per run:
+chain.invoke(inputs, config={"callbacks": [ParryCallback(guard)]})
+```
+
+| | `install()` | `ParryCallback` |
+|---|---|---|
+| Caching | ✅ | ❌ callbacks can't return a response |
+| Rate limiting | ✅ | ✅ before each LLM run |
+| Budget | ✅ | ✅ before each LLM run |
+| Cost tracking | ✅ exact SDK usage | ✅ from `usage_metadata`, then `llm_output["token_usage"]`, then an estimate |
+| Any provider | OpenAI / Anthropic SDKs | ✅ any LangChain chat model or LLM |
+
+The callback sets `raise_error = True`, so `BudgetExceeded` and `RateLimited`
+**stop the run** instead of being swallowed by LangChain's callback manager.
+
+## Using both
+
+Using both with the same guard is safe. When the SDK hook already handled a
+call, the callback skips its own accounting, so nothing is counted twice:
+
+```python
+guard = parry.install()
+llm = ChatOpenAI(model="gpt-4o-mini", callbacks=[ParryCallback(guard)])
+llm.invoke("count me once")
+assert guard.stats.requests == 1
+```

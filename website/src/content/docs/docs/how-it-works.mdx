@@ -1,0 +1,84 @@
+---
+title: How it works
+description: What parry does on every call, why it hooks SDK classes instead of clients, and how the work is split between Rust and Python.
+---
+
+import RequestFlow from '../../../components/docs/RequestFlow.astro';
+import { Aside, FileTree } from '@astrojs/starlight/components';
+
+`parry.install()` replaces `create` on the SDK's resource classes with a thin
+hook. On every call the hook finds the active guard and runs the request
+through seven stages. With no active guard, the hook calls the original
+method and nothing else happens.
+
+<RequestFlow />
+
+## Why hook the class instead of the client?
+
+Clients get created everywhere: in your code, inside LangChain and LlamaIndex,
+and inside helper libraries. Patching the resource **class**, for example
+`openai.resources.chat.completions.Completions`, catches all of them,
+including clients created *before* `install()` ran.
+
+The hooks are inert without a guard. Importing parry changes nothing. Only
+`install()`, a `with Parry():` block or `parry.wrap(client)` turns them on.
+
+Hooked methods:
+
+| SDK | Classes |
+|---|---|
+| openai | `Completions`, `AsyncCompletions`, `Responses`, `AsyncResponses` |
+| anthropic | `Messages`, `AsyncMessages`, `beta.Messages`, `beta.AsyncMessages` |
+
+`install()` is **idempotent**. Hooks are recognised by a `__parry_original__`
+marker, so calling it twice never wraps anything twice, and `uninstall()`
+restores the exact original functions.
+
+## Rust core, Python shell
+
+<FileTree>
+- python/parry/
+  - \_\_init\_\_.py public API: install, wrap, bypass, stats
+  - _patch.py SDK hooks
+  - _core.py the Parry guard and the per-call pipeline
+  - _adapters.py per-endpoint knowledge: model, usage, stream assembly
+  - _stream.py in-place stream metering
+  - _storage.py optional SQLite
+  - integrations/ LangChain, LlamaIndex
+- src/ Rust, compiled to parry._parry_native
+  - cache.rs blake3 key + moka LRU/TTL
+  - rate_limit.rs governor token buckets
+  - cost.rs pricing table + ledger
+  - retry.rs backoff + error classification
+  - tokenize.rs canonical JSON, tiktoken counts
+</FileTree>
+
+**Rust** holds everything that has to be fast, thread-safe and free of Python
+objects: the cache (values are strings), the token buckets, the spend ledger,
+the retry policy, request canonicalisation and token counting. Every type is
+`Sync`, so one guard is safely shared across threads and asyncio tasks.
+Hashing and tokenising release the GIL.
+
+**Python** handles everything that touches SDK objects: swapping methods,
+serialising pydantic responses, metering streams, raising exceptions, and
+**sleeping**. The rate limiter's `try_acquire` returns "seconds to wait"
+instead of blocking, so sync code can call `time.sleep` and async code can
+`await asyncio.sleep` on the same primitive.
+
+## Special cases
+
+- **`.with_raw_response`**: detected through the `X-Stainless-Raw-Response`
+  header the SDK adds. On a cache hit parry returns a `CachedRawResponse` with
+  `.parse()` and `.headers`, which is what LangChain uses. Its `parse()` is a
+  coroutine exactly when the installed SDK's own is.
+- **Streams**: never served *from* cache. parry instruments the SDK's own
+  `Stream` object in place, so `type(stream) is openai.Stream` still holds.
+  See [Streaming](/docs/features/streaming/).
+- **Positional arguments**: SDK `create()` methods are keyword-only. A call
+  with positional arguments is passed straight through.
+
+<Aside type="caution" title="Not intercepted in v0.1">
+`chat.completions.parse()`, `responses.parse()`, the `messages.stream()` helper,
+`.with_streaming_response`, embeddings, batches, files, images and audio. See
+[Failure modes](/docs/reference/failure-modes/#not-intercepted).
+</Aside>

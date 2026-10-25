@@ -1,0 +1,77 @@
+---
+title: FAQ
+description: Common questions about parry. Is monkey-patching safe? Does it work with Azure, vLLM or Ollama? What about multiple processes?
+---
+
+### Is monkey-patching safe?
+
+parry replaces exactly eight methods: `create` on the OpenAI chat-completions
+and Responses resources and on the Anthropic messages and beta-messages
+resources, each in sync and async form. The replacements keep the original
+signature and docstring (`functools.wraps`), fall straight through when no
+guard is active, and are fully reversed by `parry.uninstall()`. CI tests the
+hooks against current *and* older SDK releases, so a breaking SDK change
+shows up as a failing test.
+
+### Do I have to change my code?
+
+No. Add `parry.install()` once. Your call sites, return types and exception
+handling stay the same.
+
+### Does it work with Azure OpenAI, vLLM, Ollama or LM Studio?
+
+Yes, if you reach them through the official `openai` SDK
+(`openai.AzureOpenAI`, or `openai.OpenAI(base_url=...)`). The client's base URL
+is part of the cache key, so different servers never share entries. For
+models the pricing table doesn't know, add a price with
+`guard.set_pricing(...)`.
+
+### What about Bedrock or Vertex?
+
+The Anthropic SDK's Bedrock and Vertex clients use the same `messages`
+resource, so they're hooked too. Bedrock-style model ids such as
+`anthropic.claude-opus-5-5` are priced correctly. Partner pricing can differ
+from Anthropic's first-party prices, so override with `set_pricing` if it does.
+
+### Will I get the same answer twice at temperature 1?
+
+Yes. Caching is on by default and identical requests get identical answers.
+For sampling workloads, turn caching off for that path with `cache=False` or
+`parry.bypass()`.
+
+### Does parry make any network calls of its own?
+
+No. There's no telemetry and no phoning home. parry only ever sees the
+requests your SDK was already going to send.
+
+### Does it log my prompts?
+
+Never, at any log level. Logs carry metadata only: model, token counts, cost
+and latency.
+
+### Can several processes share the cache and rate limits?
+
+Not in v0.1. Everything is per process. SQLite storage can be shared between
+processes, but rate limits and budgets can't. For multi-replica services,
+use an API gateway and a shared cache.
+
+### Is it thread-safe? asyncio-safe?
+
+Yes to both. The Rust core is lock-free or uses fine-grained locks, and is
+shared safely across threads. `with Parry():` scopes are `contextvars`-based,
+so they're isolated per thread and per asyncio task.
+
+### Why does PyPI say `llm-parry` but I import `parry`?
+
+`parry` was already taken on PyPI by an unrelated project. The distribution
+name is `llm-parry`. The module and the CLI are `parry`.
+
+### How do I remove it?
+
+Delete the `parry.install()` line, or call `parry.uninstall()` at runtime.
+
+### Where do I report a bug or ask for a feature?
+
+Open an issue on [GitHub](https://github.com/IND-Anshuman/parry/issues). There
+are templates for bugs, feature requests and pricing updates. The source is at
+[github.com/IND-Anshuman/parry](https://github.com/IND-Anshuman/parry).
