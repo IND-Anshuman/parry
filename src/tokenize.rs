@@ -5,6 +5,13 @@
 //! other model (Anthropic included, whose tokenizer is not public) gets
 //! `o200k_base` as an approximation. Counts are only ever used for
 //! *estimates*: real usage reported by the provider always wins.
+//!
+//! Anthropic's newer tokenizer (Claude 4.7+ and the Mythos preview) produces
+//! roughly 30% more tokens than `o200k_base` for the same text, per Anthropic's
+//! pricing page. Since that tokenizer is not public either, counts for those
+//! models are scaled by [`ANTHROPIC_NEW_TOKENIZER_MULTIPLIER`]. Without this,
+//! the token-bucket limiter and the pre-flight `max_cost_usd` check both
+//! under-enforce by ~30% on those models.
 
 use std::fmt::Write as _;
 
@@ -12,6 +19,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde_json::Value;
 use tiktoken_rs::CoreBPE;
+
+use crate::cost::{canonical_model, prefix_matches};
 
 /// Keys whose string values are prompt text worth counting.
 const TEXT_KEYS: &[&str] = &[
@@ -27,6 +36,53 @@ const TEXT_KEYS: &[&str] = &[
 
 /// Approximate per-message framing overhead (role markers etc.).
 const TOKENS_PER_MESSAGE: usize = 4;
+
+/// Claude 4.7+ and the Mythos preview use a newer tokenizer that produces
+/// about 30% more tokens than the previous one for the same text. parry has no
+/// public tokenizer for these models, so it scales the `o200k_base` estimate by
+/// this factor. Source: Anthropic pricing page, verified 2026-10-26.
+const ANTHROPIC_NEW_TOKENIZER_MULTIPLIER: f64 = 1.30;
+
+/// Models (by family prefix) that use Anthropic's newer tokenizer. Claude
+/// Sonnet 4.6 / Opus 4.6 and earlier use the previous tokenizer, so they are
+/// deliberately absent. Dated snapshots and provider spellings resolve to these
+/// prefixes via [`canonical_model`] + [`prefix_matches`].
+const ANTHROPIC_NEW_TOKENIZER_MODELS: &[&str] = &[
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-opus-5-5",
+    "claude-sonnet-5",
+    "claude-sonnet-5-5",
+    "claude-mythos-5-1",
+    "claude-fable-5",
+    "claude-fable-5-1",
+];
+
+/// The tokenizer multiplier for a model: `1.30` for Claude 4.7+/Mythos, else
+/// `1.0`. Matching mirrors the pricing table so that `claude-opus-5-5`,
+/// `claude-opus-5-5-20260101` and `anthropic.claude-opus-5-5` all resolve alike.
+fn token_multiplier(model: &str) -> f64 {
+    let m = canonical_model(model);
+    if ANTHROPIC_NEW_TOKENIZER_MODELS
+        .iter()
+        .any(|prefix| prefix_matches(m, prefix))
+    {
+        ANTHROPIC_NEW_TOKENIZER_MULTIPLIER
+    } else {
+        1.0
+    }
+}
+
+/// Scale a raw `o200k_base` count by the model's tokenizer multiplier.
+fn scale_for_model(raw: usize, model: &str) -> usize {
+    let mult = token_multiplier(model);
+    if mult == 1.0 {
+        raw
+    } else {
+        (raw as f64 * mult).round() as usize
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum NormalizeError {
@@ -120,7 +176,8 @@ pub fn count_text_tokens(text: &str, model: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
-    encoder_for(model).encode_ordinary(text).len()
+    let raw = encoder_for(model).encode_ordinary(text).len();
+    scale_for_model(raw, model)
 }
 
 /// Estimate prompt tokens for a JSON request payload by counting every prompt
@@ -130,7 +187,7 @@ pub fn estimate_payload_tokens(payload: &str, model: &str) -> Result<usize, Norm
     let bpe = encoder_for(model);
     let mut total = 0usize;
     walk(&value, None, bpe, &mut total);
-    Ok(total)
+    Ok(scale_for_model(total, model))
 }
 
 fn walk(value: &Value, key: Option<&str>, bpe: &CoreBPE, total: &mut usize) {
@@ -224,6 +281,50 @@ mod tests {
         assert!((2..=6).contains(&n), "unexpected count {n}");
         let legacy = count_text_tokens("Hello, world!", "gpt-4");
         assert!((2..=6).contains(&legacy));
+    }
+
+    #[test]
+    fn new_anthropic_tokenizer_scales_up_by_30pct() {
+        let text = "The quick brown fox jumps over the lazy dog, repeatedly and often.";
+        // Old tokenizer models share the o200k_base baseline (multiplier 1.0).
+        let base = count_text_tokens(text, "claude-sonnet-4-6");
+        let scaled = count_text_tokens(text, "claude-sonnet-5");
+        assert!(scaled > base, "expected scale-up, got {scaled} vs {base}");
+        assert_eq!(scaled, (base as f64 * 1.30).round() as usize);
+    }
+
+    #[test]
+    fn openai_and_pre_47_claude_are_unscaled() {
+        let text = "hello world, this is a plain tokenizer counting sanity check";
+        let gpt = count_text_tokens(text, "gpt-4o");
+        // gpt-4o, Sonnet 4.6 and Opus 4.6 all use the o200k_base baseline here.
+        assert_eq!(count_text_tokens(text, "claude-sonnet-4-6"), gpt);
+        assert_eq!(count_text_tokens(text, "claude-opus-4-6"), gpt);
+        assert_eq!(count_text_tokens(text, "claude-opus-4-5"), gpt);
+    }
+
+    #[test]
+    fn multiplier_resolves_dated_and_provider_spellings() {
+        assert_eq!(token_multiplier("claude-opus-5-5-20260101"), 1.30);
+        assert_eq!(token_multiplier("anthropic.claude-opus-5-5"), 1.30);
+        assert_eq!(token_multiplier("us.anthropic.claude-sonnet-5"), 1.30);
+        assert_eq!(token_multiplier("claude-fable-5-1"), 1.30);
+        assert_eq!(token_multiplier("claude-mythos-5-1"), 1.30);
+        // Explicitly not affected.
+        assert_eq!(token_multiplier("claude-opus-4-6"), 1.0);
+        assert_eq!(token_multiplier("claude-sonnet-4-6"), 1.0);
+        assert_eq!(token_multiplier("claude-haiku-5-5"), 1.0);
+        assert_eq!(token_multiplier("gpt-4o"), 1.0);
+    }
+
+    #[test]
+    fn payload_estimate_scales_for_new_tokenizer() {
+        let payload = r#"{"model":"claude-opus-5-5","messages":[
+            {"role":"user","content":"Summarise the attached report in three bullet points."}
+        ]}"#;
+        let old = estimate_payload_tokens(payload, "claude-opus-4-6").unwrap();
+        let new = estimate_payload_tokens(payload, "claude-opus-5-5").unwrap();
+        assert_eq!(new, (old as f64 * 1.30).round() as usize);
     }
 
     #[test]

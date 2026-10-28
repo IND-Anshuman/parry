@@ -98,6 +98,46 @@ def test_unpriced_model_warns_once(mock, openai_client, caplog):
     assert guard.total_cost_usd == pytest.approx(15 / 1e6)
 
 
+def test_unpriced_model_raises_under_budget_by_default(mock, openai_client):
+    # Fail closed: with a budget set, a model parry cannot price must not slip
+    # through at $0 and silently bypass the limit.
+    parry.install(cache=False, max_cost_usd=1.0)
+    with pytest.raises(parry.UnpricedModel) as info:
+        chat(openai_client, model="my-local-llama")
+    assert mock.count() == 0
+    assert info.value.model == "my-local-llama"
+    assert info.value.limit_usd == 1.0
+    # Subclasses BudgetExceeded so existing budget handlers still catch it.
+    assert isinstance(info.value, parry.BudgetExceeded)
+
+
+def test_unpriced_model_allowed_when_on_unpriced_ignore(mock, openai_client):
+    guard = parry.install(cache=False, max_cost_usd=1.0, on_unpriced="ignore")
+    chat(openai_client, model="my-local-llama")
+    assert mock.count() == 1
+    assert guard.stats.unpriced_requests == 1
+
+
+def test_fail_closed_only_applies_with_a_budget(mock, openai_client):
+    # No budget set: unpriced models pass through regardless of on_unpriced.
+    guard = parry.install(cache=False)
+    chat(openai_client, model="my-local-llama")
+    assert mock.count() == 1
+    assert guard.stats.unpriced_requests == 1
+
+
+def test_priced_model_unaffected_by_fail_closed(mock, openai_client):
+    guard = parry.install(cache=False, max_cost_usd=1.0)
+    chat(openai_client)  # gpt-4o is in the pricing table
+    assert mock.count() == 1
+    assert guard.total_cost_usd == pytest.approx(GPT4O_CALL)
+
+
+def test_on_unpriced_validates():
+    with pytest.raises(ValueError):
+        Parry(on_unpriced="nope")  # type: ignore[arg-type]
+
+
 def test_cost_tracking_off(mock, openai_client):
     guard = parry.install(cost_tracking=False, cache=False)
     chat(openai_client)

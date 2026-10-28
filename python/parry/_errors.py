@@ -23,6 +23,33 @@ class BudgetExceeded(ParryError):
         )
 
 
+class UnpricedModel(BudgetExceeded):
+    """Raised *before* a request when ``max_cost_usd`` is set but the model has
+    no known price, so parry cannot tell whether the call fits the budget.
+
+    parry fails closed rather than let an unbudgetable call through: an unpriced
+    model would otherwise be charged $0 and silently bypass the limit. Register
+    a price with ``guard.set_pricing(model, ...)``, or pass ``on_unpriced="ignore"``
+    to allow these calls (they are still tracked as unpriced and charged $0).
+
+    It subclasses :class:`BudgetExceeded` so existing ``except BudgetExceeded``
+    handlers catch it too.
+    """
+
+    def __init__(self, model: str, spent_usd: float, limit_usd: float):
+        self.model = model
+        self.spent_usd = spent_usd
+        self.limit_usd = limit_usd
+        self.estimate_usd = 0.0
+        # Skip BudgetExceeded's "spent/limit" phrasing; this is a different cause.
+        ParryError.__init__(
+            self,
+            f"parry: no pricing for model {model!r}, so its cost cannot be counted "
+            f"toward the ${limit_usd:.6f} budget (${spent_usd:.6f} spent so far). "
+            f"Register it with set_pricing(), or pass on_unpriced='ignore' to allow it.",
+        )
+
+
 class RateLimited(ParryError):
     """Raised when parry's own rate limiter refuses a request.
 

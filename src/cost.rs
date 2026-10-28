@@ -174,7 +174,7 @@ pub fn canonical_model(model: &str) -> &str {
     m
 }
 
-fn prefix_matches(model: &str, prefix: &str) -> bool {
+pub(crate) fn prefix_matches(model: &str, prefix: &str) -> bool {
     match model.strip_prefix(prefix) {
         Some("") => true,
         Some(rest) => rest.starts_with(['-', '@', ':']),

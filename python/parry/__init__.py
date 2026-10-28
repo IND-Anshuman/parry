@@ -16,7 +16,7 @@ from typing import Any, TypeVar
 
 from . import _patch, _state
 from ._core import AsyncCachedRawResponse, CachedRawResponse, Parry, ParryStats
-from ._errors import BudgetExceeded, ParryError, RateLimited
+from ._errors import BudgetExceeded, ParryError, RateLimited, UnpricedModel
 from ._parry_native import Cache, Cost, RateLimit, Retry, count_tokens, estimate_tokens
 
 __version__ = "0.1.0"
@@ -33,6 +33,7 @@ __all__ = [
     "RateLimit",
     "RateLimited",
     "Retry",
+    "UnpricedModel",
     "bypass",
     "count_tokens",
     "estimate_tokens",

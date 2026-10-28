@@ -16,3 +16,5 @@ build/
 *.db-journal
 .coverage
 htmlcov/
+.claude
+.hermes

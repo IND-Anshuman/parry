@@ -23,7 +23,7 @@ from ._adapters import (
     raw_mode,
     request_json,
 )
-from ._errors import BudgetExceeded, ParryError, RateLimited
+from ._errors import BudgetExceeded, ParryError, RateLimited, UnpricedModel
 from ._parry_native import Cache, Cost, RateLimit, Retry, count_tokens, estimate_tokens
 from ._storage import SQLiteStore, start_of_today
 from ._stream import instrument_async_stream, instrument_stream
@@ -358,6 +358,7 @@ class Parry:
         cost_tracking: bool = True,
         retry: bool = True,
         max_cost_usd: float | None = None,
+        on_unpriced: Literal["raise", "ignore"] = "raise",
         cache_ttl: float | None = 3600,
         cache_size: int = 10_000,
         on_rate_limit: Literal["wait", "raise"] = "wait",
@@ -369,6 +370,8 @@ class Parry:
     ) -> None:
         if on_rate_limit not in ("wait", "raise"):
             raise ValueError("on_rate_limit must be 'wait' or 'raise'")
+        if on_unpriced not in ("raise", "ignore"):
+            raise ValueError("on_unpriced must be 'raise' or 'ignore'")
         if max_cost_usd is not None and max_cost_usd < 0:
             raise ValueError("max_cost_usd must be >= 0")
         if cache_size is None or cache_size < 1:
@@ -380,6 +383,7 @@ class Parry:
         self.cost_tracking = cost_tracking
         self.retry = retry
         self.max_cost_usd = max_cost_usd
+        self.on_unpriced = on_unpriced
         self.on_rate_limit = on_rate_limit
         self.max_wait = max_wait
         self.cache_ttl = cache_ttl
@@ -486,15 +490,23 @@ class Parry:
             await asyncio.sleep(wait)
 
     def check_budget(self, model: str = "", prompt_tokens: int = 0) -> None:
-        """Raise ``BudgetExceeded`` if a call to ``model`` would cross ``max_cost_usd``."""
+        """Raise ``BudgetExceeded`` if a call to ``model`` would cross ``max_cost_usd``.
+
+        With ``on_unpriced="raise"`` (the default), a model with no known price
+        raises :class:`UnpricedModel` instead of slipping past the budget at $0.
+        """
         limit = self.max_cost_usd
         if limit is None:
             return
         spent = self._cost.total_cost_usd
-        estimate = (
-            (self._cost.compute(model, prompt_tokens, 0) or 0.0) if model and spent < limit else 0.0
-        )
-        if spent >= limit or spent + estimate > limit:
+        if spent >= limit:
+            self._count("budget_rejections")
+            raise BudgetExceeded(spent, limit, 0.0, model)
+        if model and self.on_unpriced == "raise" and self._cost.price(model) is None:
+            self._count("budget_rejections")
+            raise UnpricedModel(model, spent, limit)
+        estimate = (self._cost.compute(model, prompt_tokens, 0) or 0.0) if model else 0.0
+        if spent + estimate > limit:
             self._count("budget_rejections")
             raise BudgetExceeded(spent, limit, estimate, model)
 
