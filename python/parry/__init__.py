@@ -19,7 +19,7 @@ from ._core import AsyncCachedRawResponse, CachedRawResponse, Parry, ParryStats
 from ._errors import BudgetExceeded, ParryError, RateLimited, UnpricedModel
 from ._parry_native import Cache, Cost, RateLimit, Retry, count_tokens, estimate_tokens
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AsyncCachedRawResponse",
@@ -60,9 +60,22 @@ def install(
     async_: bool = True,
     openai: bool = True,
     anthropic: bool = True,
+    groq: bool = True,
+    together: bool = True,
+    google: bool = True,
+    ollama: bool = True,
+    mistral: bool = True,
+    cohere: bool = True,
     **options: Any,
 ) -> Parry:
-    """Guard every OpenAI and Anthropic call in this process.
+    """Guard every supported LLM call in this process.
+
+    Covers OpenAI and Anthropic, the OpenAI-shaped SDKs groq and together,
+    Google's ``google-genai``, and the bespoke surfaces ollama, mistral and
+    cohere. Providers whose SDK is not installed are skipped, so the defaults are
+    safe. Pass ``openai=False`` (etc.) to opt a provider out. (AWS Bedrock is
+    guarded per-client via ``parry.integrations.bedrock.guard``, not here, because
+    boto3 builds its methods dynamically.)
 
     Safe to call more than once: methods are never wrapped twice. With no
     arguments a second call returns the guard that is already installed.
@@ -77,7 +90,20 @@ def install(
         elif options:
             raise TypeError("pass either a Parry instance or Parry options, not both")
         _state.global_guard = guard
-        providers = tuple(p for p, on in (("openai", openai), ("anthropic", anthropic)) if on)
+        providers = tuple(
+            p
+            for p, on in (
+                ("openai", openai),
+                ("anthropic", anthropic),
+                ("groq", groq),
+                ("together", together),
+                ("google", google),
+                ("ollama", ollama),
+                ("mistral", mistral),
+                ("cohere", cohere),
+            )
+            if on
+        )
         _patch.apply(sync=sync, async_=async_, providers=providers)
         return guard
 

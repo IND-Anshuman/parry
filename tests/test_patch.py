@@ -342,7 +342,7 @@ def test_bookkeeping_failure_never_breaks_the_call(mock, openai_client, monkeypa
     def explode(*a, **k):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(guard, "_record", explode)
+    monkeypatch.setattr(guard, "_record_tiered", explode)
     r = chat(openai_client)
     assert r.choices[0].message.content == "echo: hello"
     assert any("bookkeeping failed" in rec.getMessage() for rec in caplog.records)
