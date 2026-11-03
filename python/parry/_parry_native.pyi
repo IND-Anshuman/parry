@@ -55,7 +55,19 @@ class RateLimit:
 class Cost:
     def __init__(self) -> None: ...
     def price(self, model: str) -> tuple[float, float] | None: ...
+    def tier_rates(self, model: str) -> dict[str, float | None] | None: ...
     def compute(self, model: str, input_tokens: int, output_tokens: int = 0) -> float | None: ...
+    def compute_tiered(
+        self,
+        model: str,
+        input_tokens: int,
+        output_tokens: int = 0,
+        *,
+        cached_input_tokens: int = 0,
+        cache_write_5m_tokens: int = 0,
+        cache_write_1h_tokens: int = 0,
+        tier: str = "standard",
+    ) -> float | None: ...
     def set_pricing(
         self, model: str, input_per_million: float, output_per_million: float
     ) -> None: ...
@@ -65,6 +77,18 @@ class Cost:
         model: str,
         input_tokens: int,
         output_tokens: int,
+        estimated: bool = False,
+    ) -> float | None: ...
+    def record_tiered(
+        self,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cached_input_tokens: int = 0,
+        cache_write_5m_tokens: int = 0,
+        cache_write_1h_tokens: int = 0,
+        tier: str = "standard",
         estimated: bool = False,
     ) -> float | None: ...
     @property

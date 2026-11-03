@@ -38,6 +38,98 @@ def test_set_pricing_validates():
         Cost().set_pricing("m", -1, 1)
 
 
+def test_adapter_usage_detail_splits_cache_tokens():
+    from parry._adapters import ANTHROPIC_MESSAGES, OPENAI_CHAT
+
+    # OpenAI prompt_tokens includes cached tokens; they must be split out.
+    oa = OPENAI_CHAT.usage_detailed(
+        {
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 200,
+                "prompt_tokens_details": {"cached_tokens": 400},
+            }
+        }
+    )
+    assert oa == (600, 200, 400, 0, 0)
+    # Anthropic reports cache tokens separately from the base input.
+    an = ANTHROPIC_MESSAGES.usage_detailed(
+        {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 1000,
+                "cache_creation_input_tokens": 200,
+            }
+        }
+    )
+    assert an == (100, 50, 1000, 200, 0)
+    # The newer per-TTL cache-creation breakdown is honoured when present.
+    an2 = ANTHROPIC_MESSAGES.usage_detailed(
+        {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 30,
+                    "ephemeral_1h_input_tokens": 70,
+                },
+            }
+        }
+    )
+    assert an2 == (100, 50, 0, 30, 70)
+
+
+def test_openai_cache_read_billed_at_discount():
+    cost = Cost()
+    # 400 of 1000 prompt tokens were cache hits; the cached part bills at 10%.
+    c = cost.record_tiered("openai", "gpt-4o", 600, 200, 400)
+    assert c == pytest.approx((600 * 2.5 + 400 * 0.25 + 200 * 10.0) / 1e6)
+    totals = cost.totals()
+    assert totals["input_tokens"] == 1000  # cached folded into the input total
+
+
+def test_priority_service_tier_bills_fast(mock, openai_client):
+    guard = parry.install(cache=False)
+    chat(openai_client, service_tier="priority")
+    assert guard.total_cost_usd == pytest.approx(GPT4O_CALL * 1.75)
+
+
+def test_tiered_cost_cache_batch_fast():
+    cost = Cost()
+    std = cost.compute("gpt-4o", 1000, 500)
+    assert cost.compute_tiered("gpt-4o", 1000, 500, tier="batch") == pytest.approx(std * 0.5)
+    assert cost.compute_tiered("gpt-4o", 1000, 500, tier="fast") == pytest.approx(std * 1.75)
+    # Cache-read input is 10% of the standard input rate on Anthropic.
+    read = cost.compute_tiered("claude-sonnet-5-5", 0, 0, cached_input_tokens=1_000_000)
+    assert read == pytest.approx(0.20)  # 2.00 * 0.10
+    assert cost.compute_tiered("not-a-model", 1, 1) is None
+
+
+def test_tier_rates_exposed():
+    cost = Cost()
+    rates = cost.tier_rates("claude-sonnet-5-5")
+    assert rates is not None
+    assert rates["cached_input_per_million"] == pytest.approx(0.20)
+    assert rates["cache_write_5m_per_million"] == pytest.approx(2.50)
+    assert rates["cache_write_1h_per_million"] == pytest.approx(4.00)
+    assert rates["fast_multiplier"] == pytest.approx(2.0)
+    assert cost.tier_rates("not-a-model") is None
+
+
+def test_tier_validation():
+    with pytest.raises(ValueError):
+        Cost().compute_tiered("gpt-4o", 1, tier="bogus")
+
+
+def test_pricing_table_carries_tier_fields():
+    row = next(r for r in Cost.pricing_table() if r["model"] == "gpt-4o")
+    assert row["cached_input_per_million"] == pytest.approx(0.25)  # 2.50 * 0.10
+    assert row["batch_multiplier"] == pytest.approx(0.5)
+    assert row["fast_multiplier"] == pytest.approx(1.75)
+    assert row["cache_write_5m_per_million"] is None  # OpenAI auto-caches
+
+
 def test_five_calls_match_hand_calculation(mock, openai_client):
     guard = parry.install(cache=False)
     for i in range(5):
