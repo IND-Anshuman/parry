@@ -2,4 +2,5 @@
 
 - ``parry.integrations.langchain``  → ``ParryCallback``
 - ``parry.integrations.llamaindex`` → ``ParryHandler``
+- ``parry.integrations.bedrock``    → ``guard`` (AWS Bedrock Converse)
 """
