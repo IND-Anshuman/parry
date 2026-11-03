@@ -98,6 +98,7 @@ impl Pricing {
     /// Every field spelled out. Used by the generated pricing table
     /// (`src/pricing_generated.rs`), where the sync tool knows each model's
     /// exact cache and batch rates from LiteLLM's data.
+    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
     pub const fn full(
         input_per_million: f64,
@@ -352,8 +353,12 @@ fn best_match<'a>(
 
 fn best_static(model: &str) -> Option<(usize, Pricing)> {
     let m = canonical_model(model);
-    best_match(m, PRICING, crate::pricing_generated::GENERATED)
-        .map(|row| (row.model.len(), row.pricing.with_provider_tiers(row.provider)))
+    best_match(m, PRICING, crate::pricing_generated::GENERATED).map(|row| {
+        (
+            row.model.len(),
+            row.pricing.with_provider_tiers(row.provider),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -711,8 +716,14 @@ impl PyCost {
             d.set_item("output_per_million", pricing.output_per_million)?;
             d.set_item("long_context_threshold", pricing.long_context_threshold)?;
             d.set_item("cached_input_per_million", pricing.cached_input_per_million)?;
-            d.set_item("cache_write_5m_per_million", pricing.cache_write_5m_per_million)?;
-            d.set_item("cache_write_1h_per_million", pricing.cache_write_1h_per_million)?;
+            d.set_item(
+                "cache_write_5m_per_million",
+                pricing.cache_write_5m_per_million,
+            )?;
+            d.set_item(
+                "cache_write_1h_per_million",
+                pricing.cache_write_1h_per_million,
+            )?;
             d.set_item("batch_multiplier", pricing.batch_multiplier)?;
             d.set_item("fast_multiplier", pricing.fast_multiplier)?;
             list.append(d)?;
@@ -838,10 +849,19 @@ mod tests {
             p("openai", "gpt-4o-audio", Pricing::flat(40.0, 80.0)),
         ];
         // Hand wins the tie on gpt-4o.
-        assert_eq!(best_match("gpt-4o", &hand, &generated).unwrap().pricing.input_per_million, 2.50);
+        assert_eq!(
+            best_match("gpt-4o", &hand, &generated)
+                .unwrap()
+                .pricing
+                .input_per_million,
+            2.50
+        );
         // Gap filled from the generated table.
         assert_eq!(
-            best_match("gemini-3-pro", &hand, &generated).unwrap().pricing.input_per_million,
+            best_match("gemini-3-pro", &hand, &generated)
+                .unwrap()
+                .pricing
+                .input_per_million,
             2.00
         );
         // Longer generated prefix beats the shorter hand prefix.
@@ -861,7 +881,16 @@ mod tests {
         // A synced row carries exact LiteLLM rates; enrichment must not clobber
         // them. 0.99 is deliberately not the derived 0.10x input, to prove it.
         let pr = Pricing::full(
-            3.0, 15.0, None, 3.0, 15.0, Some(0.99), None, None, Some(0.40), None,
+            3.0,
+            15.0,
+            None,
+            3.0,
+            15.0,
+            Some(0.99),
+            None,
+            None,
+            Some(0.40),
+            None,
         );
         let enriched = pr.with_provider_tiers("anthropic");
         assert_eq!(enriched.cached_input_per_million, Some(0.99)); // explicit kept
@@ -888,7 +917,10 @@ mod tests {
     #[test]
     fn plain_cost_unchanged_by_tier_fields() {
         let p = lookup_static("gpt-4o").unwrap();
-        assert!(close(p.cost(1000, 500), (1000.0 * 2.5 + 500.0 * 10.0) / 1e6));
+        assert!(close(
+            p.cost(1000, 500),
+            (1000.0 * 2.5 + 500.0 * 10.0) / 1e6
+        ));
     }
 
     #[test]
@@ -900,8 +932,14 @@ mod tests {
             output_tokens: 500,
             ..Usage::default()
         };
-        assert!(close(l.compute_tiered("gpt-4o", &u, Tier::Batch).unwrap(), std * 0.50));
-        assert!(close(l.compute_tiered("gpt-4o", &u, Tier::Fast).unwrap(), std * 1.75));
+        assert!(close(
+            l.compute_tiered("gpt-4o", &u, Tier::Batch).unwrap(),
+            std * 0.50
+        ));
+        assert!(close(
+            l.compute_tiered("gpt-4o", &u, Tier::Fast).unwrap(),
+            std * 1.75
+        ));
     }
 
     #[test]
@@ -935,7 +973,8 @@ mod tests {
             ..Usage::default()
         };
         assert!(close(
-            l.compute_tiered("my-model", &cached, Tier::Standard).unwrap(),
+            l.compute_tiered("my-model", &cached, Tier::Standard)
+                .unwrap(),
             3.0
         ));
         let io = Usage {
