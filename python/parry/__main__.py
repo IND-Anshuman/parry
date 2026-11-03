@@ -52,10 +52,29 @@ def _stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fmt(value: float | None, width: int, places: int = 2) -> str:
+    """Right-align a rate, or a dash when the tier is not modelled."""
+    return f"{'—':>{width}}" if value is None else f"{value:>{width}.{places}f}"
+
+
 def _pricing(args: argparse.Namespace) -> int:
     rows = [r for r in Cost.pricing_table() if not args.provider or r["provider"] == args.provider]
     if args.json:
         print(json.dumps(rows, indent=2))
+        return 0
+    if args.tiers:
+        header = (
+            f"{'provider':<10} {'model':<28} {'$/M in':>8} {'$/M out':>9} "
+            f"{'$/M cache rd':>12} {'batch':>6} {'fast':>5}"
+        )
+        print(header)
+        for r in rows:
+            print(
+                f"{r['provider']:<10} {r['model']:<28} "
+                f"{r['input_per_million']:>8.2f} {r['output_per_million']:>9.2f} "
+                f"{_fmt(r['cached_input_per_million'], 12):>12} "
+                f"{_fmt(r['batch_multiplier'], 6):>6} {_fmt(r['fast_multiplier'], 5):>5}"
+            )
         return 0
     print(f"{'provider':<10} {'model':<28} {'$/M input':>10} {'$/M output':>11}")
     for r in rows:
@@ -81,6 +100,11 @@ def main(argv: list[str] | None = None) -> int:
 
     p_price = sub.add_parser("pricing", help="show the built-in pricing table")
     p_price.add_argument("--provider", choices=["openai", "anthropic"])
+    p_price.add_argument(
+        "--tiers",
+        action="store_true",
+        help="show cache-read, batch and fast tier rates",
+    )
     p_price.add_argument("--json", action="store_true")
     p_price.set_defaults(func=_pricing)
 

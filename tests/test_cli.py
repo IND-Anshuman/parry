@@ -14,6 +14,12 @@ def test_pricing_table(capsys):
     assert "claude-opus-5-5" in out and "gpt-4o" not in out
 
 
+def test_pricing_tiers_view(capsys):
+    assert main(["pricing", "--provider", "openai", "--tiers"]) == 0
+    out = capsys.readouterr().out
+    assert "cache rd" in out and "gpt-4o" in out
+
+
 def test_stats_from_database(tmp_path, capsys, mock, openai_client):
     db = tmp_path / "parry.db"
     parry.install(storage=db)
