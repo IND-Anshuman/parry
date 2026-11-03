@@ -5,6 +5,28 @@ description: Release history for parry.
 
 import { Badge } from '@astrojs/starlight/components';
 
+## 0.2.0 <Badge text="2026-11-03" variant="tip" />
+
+Cost-model correctness and provider reach. See
+[CHANGELOG.md](https://github.com/IND-Anshuman/parry/blob/main/CHANGELOG.md) for
+the full list.
+
+**Cost**
+- Pricing tiers: cached input, 5m/1h cache writes, batch and fast/priority, via
+  `compute_tiered` / `record_tiered` / `tier_rates` and `parry pricing --tiers`.
+- Cache-aware usage: cache-read and cache-write tokens are split out and billed
+  at the cache rate.
+- Fail-closed `on_unpriced` (default `"raise"`): an unpriced model raises
+  `UnpricedModel` instead of slipping past the budget at $0.
+- Anthropic 4.7+ tokenizer multiplier (~1.30×) in pre-flight estimates.
+- Pricing sync from LiteLLM's live database (`scripts/sync_pricing.py`).
+
+**Providers**
+- `install()` now also guards Groq, Together, Google `google-genai`, Ollama,
+  Mistral and Cohere when their SDKs are installed, each with an opt-out flag.
+- AWS Bedrock Converse via `parry.integrations.bedrock.guard`.
+- Guides for the OpenAI Agents SDK and Pydantic AI.
+
 ## 0.1.0 <Badge text="2026-10-25" variant="tip" />
 
 The first release. See also [CHANGELOG.md](https://github.com/IND-Anshuman/parry/blob/main/CHANGELOG.md) and [GitHub releases](https://github.com/IND-Anshuman/parry/releases).

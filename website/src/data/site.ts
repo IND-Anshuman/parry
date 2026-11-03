@@ -10,7 +10,15 @@ export function url(path = ''): string {
 
 export const GITHUB = 'https://github.com/IND-Anshuman/parry';
 export const PYPI_NAME = 'llm-parry';
-export const VERSION = '0.1.0';
+
+/** Read the package version from pyproject.toml so the site never drifts from
+ * the published package. */
+function loadVersion(): string {
+  const toml = readFileSync(resolve(process.cwd(), '../pyproject.toml'), 'utf8');
+  return toml.match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? '0.0.0';
+}
+
+export const VERSION = loadVersion();
 
 export interface PriceRow {
   provider: 'openai' | 'anthropic';
@@ -20,6 +28,33 @@ export interface PriceRow {
   longThreshold?: number;
   longInput?: number;
   longOutput?: number;
+  /** Cache-read (hit) input rate, per million tokens. */
+  cachedInput?: number;
+  /** Anthropic 5-minute / 1-hour cache-write rates, per million input tokens. */
+  cacheWrite5m?: number;
+  cacheWrite1h?: number;
+  /** Whole-call tier multipliers (batch is cheaper, fast is dearer). */
+  batchMultiplier?: number;
+  fastMultiplier?: number;
+}
+
+/**
+ * Derive the tier rates the library computes in `Pricing::with_provider_tiers`
+ * (src/cost.rs): cache read is 10% of input for both providers; Anthropic adds
+ * 5-minute (1.25×) and 1-hour (2×) cache writes; batch is 50% off; fast is
+ * 1.75× (OpenAI) or 2× (Anthropic). Keep these ratios in sync with the Rust.
+ */
+function withTiers(row: PriceRow): PriceRow {
+  row.cachedInput = row.input * 0.1;
+  row.batchMultiplier = 0.5;
+  if (row.provider === 'anthropic') {
+    row.cacheWrite5m = row.input * 1.25;
+    row.cacheWrite1h = row.input * 2.0;
+    row.fastMultiplier = 2.0;
+  } else {
+    row.fastMultiplier = 1.75;
+  }
+  return row;
 }
 
 /**
@@ -43,7 +78,7 @@ function loadPricing(): { rows: PriceRow[]; verified: string } {
       row.longInput = Number(m[7]);
       row.longOutput = Number(m[8]);
     }
-    rows.push(row);
+    rows.push(withTiers(row));
   }
   const verified = source.match(/Pricing last verified (\d{4}-\d{2}-\d{2})/)?.[1] ?? 'unknown';
   if (rows.length === 0) throw new Error('could not parse any pricing rows from src/cost.rs');
