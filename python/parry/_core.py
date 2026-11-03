@@ -17,6 +17,7 @@ from ._adapters import (
     Adapter,
     StreamAccumulator,
     Uncacheable,
+    UsageDetail,
     _get,
     decode_response,
     encode_response,
@@ -178,6 +179,7 @@ class _Call:
         "async_raw_parse",
         "provider",
         "model",
+        "tier",
         "mode",
         "streaming",
         "key",
@@ -194,6 +196,7 @@ class _Call:
         kwargs: dict[str, Any],
         is_async: bool,
         async_raw_parse: bool,
+        is_stream: bool = False,
     ):
         self.guard = guard
         self.adapter = adapter
@@ -203,8 +206,11 @@ class _Call:
         self.async_raw_parse = async_raw_parse
         self.provider = adapter.provider
         self.model = adapter.model(kwargs)
+        self.tier = adapter.tier(kwargs)
         self.mode = raw_mode(kwargs)
-        self.streaming = kwargs.get("stream") is True
+        # A stream is requested either by a ``stream=True`` flag (OpenAI,
+        # Anthropic) or by calling a dedicated streaming method (Google).
+        self.streaming = kwargs.get("stream") is True or is_stream
         self._json: str | None = None
         self._json_done = False
         self._prompt_tokens: int | None = None
@@ -313,30 +319,40 @@ class _Call:
 
     def account(self, response: Any) -> None:
         try:
-            usage = self.adapter.usage(response)
-            estimated = usage is None
-            if usage is None:
-                usage = (self.prompt_tokens(), 0)
+            detail = self.adapter.usage_detailed(response)
+            estimated = detail is None
+            if detail is None:
+                detail = UsageDetail(self.prompt_tokens(), 0)
             model = _get(response, "model") or self.model
-            cost = self.guard._record(self.provider, str(model), usage[0], usage[1], estimated)
+            cost = self.guard._record_tiered(
+                self.provider, str(model), detail, self.tier, estimated
+            )
             if self.key is not None and self.adapter.cacheable_response(response):
-                self.guard._store_entry(self.key, encode_response(response), sum(usage), cost)
+                self.guard._store_entry(
+                    self.key, encode_response(response), detail.total_tokens, cost
+                )
         except Exception as exc:  # bookkeeping must never break the user's call
             log.warning("parry: bookkeeping failed for %s:%s (%s)", self.provider, self.model, exc)
 
     def on_stream_done(self, acc: StreamAccumulator) -> None:
         try:
-            usage = acc.usage
-            estimated = usage is None
-            if usage is None:
-                usage = (self.prompt_tokens(), count_tokens(acc.output_text(), self.model))
-            self.guard._record(self.provider, self.model, usage[0], usage[1], estimated)
+            detail = acc.usage_detail
+            estimated = acc.usage is None
+            if detail is None:
+                if acc.usage is None:
+                    detail = UsageDetail(
+                        self.prompt_tokens(), count_tokens(acc.output_text(), self.model)
+                    )
+                else:
+                    detail = UsageDetail(acc.usage[0], acc.usage[1])
+            cost = self.guard._record_tiered(
+                self.provider, self.model, detail, self.tier, estimated
+            )
             if self.key is None:
                 return
             final = acc.result()
             if final is not None:
-                cost = self.guard._cost.compute(self.model, usage[0], usage[1]) or 0.0
-                self.guard._store_entry(self.key, encode_response(final), sum(usage), cost)
+                self.guard._store_entry(self.key, encode_response(final), detail.total_tokens, cost)
         except Exception as exc:
             log.warning(
                 "parry: stream bookkeeping failed for %s:%s (%s)", self.provider, self.model, exc
@@ -649,6 +665,62 @@ class Parry:
         )
         return cost or 0.0
 
+    def _record_tiered(
+        self,
+        provider: str,
+        model: str,
+        detail: UsageDetail,
+        tier: str,
+        estimated: bool,
+    ) -> float:
+        if not self.cost_tracking:
+            return (
+                self._cost.compute_tiered(
+                    model,
+                    detail.input,
+                    detail.output,
+                    cached_input_tokens=detail.cached_input,
+                    cache_write_5m_tokens=detail.cache_write_5m,
+                    cache_write_1h_tokens=detail.cache_write_1h,
+                    tier=tier,
+                )
+                or 0.0
+            )
+        cost = self._cost.record_tiered(
+            provider,
+            model,
+            detail.input,
+            detail.output,
+            detail.cached_input,
+            detail.cache_write_5m,
+            detail.cache_write_1h,
+            tier,
+            estimated,
+        )
+        if cost is None and model not in self._warned_unpriced:
+            self._warned_unpriced.add(model)
+            log.warning(
+                "parry: no pricing for model %r; its cost is recorded as $0 and does not count "
+                "toward max_cost_usd. Use guard.set_pricing(%r, input_per_million=..., "
+                "output_per_million=...) to fix.",
+                model,
+                model,
+            )
+        if self._store is not None:
+            self._store.record(provider, model, detail.total_input, detail.output, cost, estimated)
+        log.debug(
+            "parry: %s:%s %d in (+%d cached) / %d out tokens, $%.6f%s [%s]",
+            provider,
+            model,
+            detail.input,
+            detail.cached_input + detail.cache_write_5m + detail.cache_write_1h,
+            detail.output,
+            cost or 0.0,
+            " (estimated)" if estimated else "",
+            tier,
+        )
+        return cost or 0.0
+
     def _store_entry(self, key: str, blob: str, tokens: int, cost: float) -> None:
         self._cache.set(key, blob, tokens, cost)
         if self._store is not None:
@@ -696,12 +768,21 @@ class Parry:
         resource: Any,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
+        is_stream: bool = False,
     ) -> Any:
         if args:  # SDK create() methods are keyword-only; leave odd calls alone
             return original(resource, *args, **kwargs)
         self._count("requests")
         _state.note_intercept()
-        call = _Call(self, adapter, resource, kwargs, is_async=False, async_raw_parse=False)
+        call = _Call(
+            self,
+            adapter,
+            resource,
+            kwargs,
+            is_async=False,
+            async_raw_parse=False,
+            is_stream=is_stream,
+        )
         hit = call.lookup()
         if hit is not _MISS:
             return hit
@@ -734,13 +815,21 @@ class Parry:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
         async_raw_parse: bool,
+        is_stream: bool = False,
     ) -> Any:
         if args:
-            return await original(resource, *args, **kwargs)
+            result = original(resource, *args, **kwargs)
+            return await result if inspect.isawaitable(result) else result
         self._count("requests")
         _state.note_intercept()
         call = _Call(
-            self, adapter, resource, kwargs, is_async=True, async_raw_parse=async_raw_parse
+            self,
+            adapter,
+            resource,
+            kwargs,
+            is_async=True,
+            async_raw_parse=async_raw_parse,
+            is_stream=is_stream,
         )
         hit = call.lookup()
         if hit is not _MISS:
@@ -755,7 +844,9 @@ class Parry:
                     break
                 await asyncio.sleep(wait)
             try:
-                result = await original(resource, **kwargs)
+                result = original(resource, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
                 break
             except Exception as exc:
                 delay = self._retry_delay(exc, attempt)
