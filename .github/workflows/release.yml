@@ -70,3 +70,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          # A re-run (or a race between the wheel jobs) must not fail the whole
+          # release by re-uploading a file PyPI already has.
+          skip-existing: true
+          verbose: true
