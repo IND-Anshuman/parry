@@ -7,6 +7,42 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+/// A pricing tier that scales the whole call. Standard is the on-demand rate;
+/// Batch is the asynchronous 50%-off queue; Fast is the priority/fast-mode
+/// surcharge (OpenAI ~1.75×, Anthropic 2×).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tier {
+    Standard,
+    Batch,
+    Fast,
+}
+
+impl Tier {
+    fn parse(s: &str) -> Option<Tier> {
+        match s {
+            "standard" => Some(Tier::Standard),
+            "batch" => Some(Tier::Batch),
+            "fast" => Some(Tier::Fast),
+            _ => None,
+        }
+    }
+}
+
+/// A token breakdown for a single call. The cache fields default to zero, so a
+/// plain `(input, output)` call costs exactly what it always did.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Usage {
+    /// Standard (uncached) input tokens.
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    /// Input tokens served from a prompt cache (a cache *hit*).
+    pub cached_input_tokens: u64,
+    /// Input tokens written to a 5-minute prompt cache.
+    pub cache_write_5m_tokens: u64,
+    /// Input tokens written to a 1-hour prompt cache.
+    pub cache_write_1h_tokens: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Pricing {
     pub input_per_million: f64,
@@ -16,6 +52,16 @@ pub struct Pricing {
     pub long_context_threshold: Option<u64>,
     pub long_input_per_million: f64,
     pub long_output_per_million: f64,
+    /// Prompt-caching rates (per million input tokens). `None` means the tier
+    /// is not modelled for this entry, and those tokens fall back to the
+    /// standard input rate — an upper bound, so parry never undercharges.
+    pub cached_input_per_million: Option<f64>,
+    pub cache_write_5m_per_million: Option<f64>,
+    pub cache_write_1h_per_million: Option<f64>,
+    /// Whole-call tier multipliers. `None` means the tier is not modelled and
+    /// is billed at the standard rate (multiplier 1.0).
+    pub batch_multiplier: Option<f64>,
+    pub fast_multiplier: Option<f64>,
 }
 
 impl Pricing {
@@ -26,6 +72,11 @@ impl Pricing {
             long_context_threshold: None,
             long_input_per_million: input,
             long_output_per_million: output,
+            cached_input_per_million: None,
+            cache_write_5m_per_million: None,
+            cache_write_1h_per_million: None,
+            batch_multiplier: None,
+            fast_multiplier: None,
         }
     }
 
@@ -36,19 +87,113 @@ impl Pricing {
             long_context_threshold: Some(threshold),
             long_input_per_million: long_in,
             long_output_per_million: long_out,
+            cached_input_per_million: None,
+            cache_write_5m_per_million: None,
+            cache_write_1h_per_million: None,
+            batch_multiplier: None,
+            fast_multiplier: None,
         }
     }
 
+    /// Every field spelled out. Used by the generated pricing table
+    /// (`src/pricing_generated.rs`), where the sync tool knows each model's
+    /// exact cache and batch rates from LiteLLM's data.
+    #[allow(clippy::too_many_arguments)]
+    pub const fn full(
+        input_per_million: f64,
+        output_per_million: f64,
+        long_context_threshold: Option<u64>,
+        long_input_per_million: f64,
+        long_output_per_million: f64,
+        cached_input_per_million: Option<f64>,
+        cache_write_5m_per_million: Option<f64>,
+        cache_write_1h_per_million: Option<f64>,
+        batch_multiplier: Option<f64>,
+        fast_multiplier: Option<f64>,
+    ) -> Self {
+        Self {
+            input_per_million,
+            output_per_million,
+            long_context_threshold,
+            long_input_per_million,
+            long_output_per_million,
+            cached_input_per_million,
+            cache_write_5m_per_million,
+            cache_write_1h_per_million,
+            batch_multiplier,
+            fast_multiplier,
+        }
+    }
+
+    /// Fill in the tier rates that aren't hand-entered, from provider-standard
+    /// ratios off the base input rate: cache read is 10% of input for both
+    /// providers; Anthropic adds a 5-minute cache write at 1.25× and a 1-hour
+    /// write at 2×; batch is 50% off for both; fast is 1.75× (OpenAI) or 2×
+    /// (Anthropic). Later Phase 0 work replaces these ratios with the exact
+    /// per-model rates synced from LiteLLM's table.
+    pub fn with_provider_tiers(mut self, provider: &str) -> Self {
+        let cache_read = self.input_per_million * 0.10;
+        match provider {
+            "anthropic" => {
+                self.cached_input_per_million.get_or_insert(cache_read);
+                self.cache_write_5m_per_million
+                    .get_or_insert(self.input_per_million * 1.25);
+                self.cache_write_1h_per_million
+                    .get_or_insert(self.input_per_million * 2.00);
+                self.batch_multiplier.get_or_insert(0.50);
+                self.fast_multiplier.get_or_insert(2.00);
+            }
+            "openai" => {
+                // OpenAI caches prompts automatically, so there is no separate
+                // cache-write charge; only the cache-read discount applies.
+                self.cached_input_per_million.get_or_insert(cache_read);
+                self.batch_multiplier.get_or_insert(0.50);
+                self.fast_multiplier.get_or_insert(1.75);
+            }
+            _ => {}
+        }
+        self
+    }
+
+    /// Standard-tier cost of a plain input/output call (no caching).
     pub fn cost(&self, input_tokens: u64, output_tokens: u64) -> f64 {
-        let long = self
-            .long_context_threshold
-            .is_some_and(|t| input_tokens > t);
-        let (i, o) = if long {
+        self.cost_detailed(
+            &Usage {
+                input_tokens,
+                output_tokens,
+                ..Usage::default()
+            },
+            Tier::Standard,
+        )
+    }
+
+    /// Cost of a call described by a full token breakdown at a given tier.
+    pub fn cost_detailed(&self, u: &Usage, tier: Tier) -> f64 {
+        let total_input = u.input_tokens
+            + u.cached_input_tokens
+            + u.cache_write_5m_tokens
+            + u.cache_write_1h_tokens;
+        let long = self.long_context_threshold.is_some_and(|t| total_input > t);
+        let (in_rate, out_rate) = if long {
             (self.long_input_per_million, self.long_output_per_million)
         } else {
             (self.input_per_million, self.output_per_million)
         };
-        (input_tokens as f64 * i + output_tokens as f64 * o) / 1_000_000.0
+        // Unknown cache rates fall back to the standard input rate (upper bound).
+        let read_rate = self.cached_input_per_million.unwrap_or(in_rate);
+        let write_5m_rate = self.cache_write_5m_per_million.unwrap_or(in_rate);
+        let write_1h_rate = self.cache_write_1h_per_million.unwrap_or(in_rate);
+        let raw = u.input_tokens as f64 * in_rate
+            + u.cached_input_tokens as f64 * read_rate
+            + u.cache_write_5m_tokens as f64 * write_5m_rate
+            + u.cache_write_1h_tokens as f64 * write_1h_rate
+            + u.output_tokens as f64 * out_rate;
+        let mult = match tier {
+            Tier::Standard => 1.0,
+            Tier::Batch => self.batch_multiplier.unwrap_or(1.0),
+            Tier::Fast => self.fast_multiplier.unwrap_or(1.0),
+        };
+        raw * mult / 1_000_000.0
     }
 }
 
@@ -182,14 +327,33 @@ pub(crate) fn prefix_matches(model: &str, prefix: &str) -> bool {
     }
 }
 
-/// Best static match as `(matched prefix length, pricing)`.
+/// Best static match as `(matched prefix length, pricing)`. Hand-curated rows
+/// in `PRICING` are searched alongside the LiteLLM-synced rows in `GENERATED`;
+/// on an equal-length prefix the hand-curated row wins, so a sync can add
+/// breadth without ever overwriting a row parry maintains more accurately.
+fn best_match<'a>(
+    m: &str,
+    hand: &'a [ModelPricing],
+    generated: &'a [ModelPricing],
+) -> Option<&'a ModelPricing> {
+    let longest = |rows: &'a [ModelPricing]| {
+        rows.iter()
+            .filter(|row| prefix_matches(m, row.model))
+            .max_by_key(|row| row.model.len())
+    };
+    match (longest(hand), longest(generated)) {
+        // Equal-length prefix: the hand-curated row wins.
+        (Some(h), Some(g)) => Some(if h.model.len() >= g.model.len() { h } else { g }),
+        (Some(h), None) => Some(h),
+        (None, Some(g)) => Some(g),
+        (None, None) => None,
+    }
+}
+
 fn best_static(model: &str) -> Option<(usize, Pricing)> {
     let m = canonical_model(model);
-    PRICING
-        .iter()
-        .filter(|row| prefix_matches(m, row.model))
-        .max_by_key(|row| row.model.len())
-        .map(|row| (row.model.len(), row.pricing))
+    best_match(m, PRICING, crate::pricing_generated::GENERATED)
+        .map(|row| (row.model.len(), row.pricing.with_provider_tiers(row.provider)))
 }
 
 #[cfg(test)]
@@ -260,6 +424,37 @@ impl Ledger {
 
     pub fn compute(&self, model: &str, input: u64, output: u64) -> Option<f64> {
         self.pricing(model).map(|p| p.cost(input, output))
+    }
+
+    pub fn compute_tiered(&self, model: &str, usage: &Usage, tier: Tier) -> Option<f64> {
+        self.pricing(model).map(|p| p.cost_detailed(usage, tier))
+    }
+
+    /// Record one completed request with a full token breakdown and tier.
+    /// Cache tokens are folded into the input-token totals for accounting, but
+    /// billed at their own tier rates. Returns the cost charged (None if the
+    /// model is not in the pricing table).
+    pub fn record_tiered(
+        &self,
+        provider: &str,
+        model: &str,
+        usage: &Usage,
+        tier: Tier,
+        estimated: bool,
+    ) -> Option<f64> {
+        let cost = self.compute_tiered(model, usage, tier);
+        let total_in = usage.input_tokens
+            + usage.cached_input_tokens
+            + usage.cache_write_5m_tokens
+            + usage.cache_write_1h_tokens;
+        let mut state = self.state.lock();
+        state.0.add(total_in, usage.output_tokens, cost, estimated);
+        state
+            .1
+            .entry(format!("{provider}:{model}"))
+            .or_default()
+            .add(total_in, usage.output_tokens, cost, estimated);
+        cost
     }
 
     /// Record one completed request. Returns the cost charged (None if the
@@ -343,10 +538,66 @@ impl PyCost {
             .map(|p| (p.input_per_million, p.output_per_million))
     }
 
+    /// Per-tier rates for a model, or None if the model is unknown. Keys:
+    /// `cached_input_per_million`, `cache_write_5m_per_million`,
+    /// `cache_write_1h_per_million`, `batch_multiplier`, `fast_multiplier`
+    /// (each may itself be None when the tier is not modelled).
+    fn tier_rates<'py>(
+        &self,
+        py: Python<'py>,
+        model: &str,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(p) = self.inner.pricing(model) else {
+            return Ok(None);
+        };
+        let d = PyDict::new(py);
+        d.set_item("cached_input_per_million", p.cached_input_per_million)?;
+        d.set_item("cache_write_5m_per_million", p.cache_write_5m_per_million)?;
+        d.set_item("cache_write_1h_per_million", p.cache_write_1h_per_million)?;
+        d.set_item("batch_multiplier", p.batch_multiplier)?;
+        d.set_item("fast_multiplier", p.fast_multiplier)?;
+        Ok(Some(d))
+    }
+
     /// Cost in USD of a call, or None if the model is unknown.
     #[pyo3(signature = (model, input_tokens, output_tokens = 0))]
     fn compute(&self, model: &str, input_tokens: u64, output_tokens: u64) -> Option<f64> {
         self.inner.compute(model, input_tokens, output_tokens)
+    }
+
+    /// Cost in USD of a call with a full token breakdown and pricing tier, or
+    /// None if the model is unknown. `tier` is "standard", "batch" or "fast".
+    #[pyo3(signature = (
+        model,
+        input_tokens,
+        output_tokens = 0,
+        *,
+        cached_input_tokens = 0,
+        cache_write_5m_tokens = 0,
+        cache_write_1h_tokens = 0,
+        tier = "standard",
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn compute_tiered(
+        &self,
+        model: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cached_input_tokens: u64,
+        cache_write_5m_tokens: u64,
+        cache_write_1h_tokens: u64,
+        tier: &str,
+    ) -> PyResult<Option<f64>> {
+        let tier = Tier::parse(tier)
+            .ok_or_else(|| PyValueError::new_err("tier must be 'standard', 'batch' or 'fast'"))?;
+        let usage = Usage {
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+            cache_write_5m_tokens,
+            cache_write_1h_tokens,
+        };
+        Ok(self.inner.compute_tiered(model, &usage, tier))
     }
 
     /// Override or add pricing for a model (exact name or family prefix).
@@ -368,6 +619,46 @@ impl PyCost {
         self.inner
             .set_pricing(model, Pricing::flat(input_per_million, output_per_million));
         Ok(())
+    }
+
+    /// Record a completed call with a full token breakdown and pricing tier.
+    /// Returns the cost charged (None if the model is unpriced).
+    #[pyo3(signature = (
+        provider,
+        model,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens = 0,
+        cache_write_5m_tokens = 0,
+        cache_write_1h_tokens = 0,
+        tier = "standard",
+        estimated = false,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn record_tiered(
+        &self,
+        provider: &str,
+        model: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        cached_input_tokens: u64,
+        cache_write_5m_tokens: u64,
+        cache_write_1h_tokens: u64,
+        tier: &str,
+        estimated: bool,
+    ) -> PyResult<Option<f64>> {
+        let tier = Tier::parse(tier)
+            .ok_or_else(|| PyValueError::new_err("tier must be 'standard', 'batch' or 'fast'"))?;
+        let usage = Usage {
+            input_tokens,
+            output_tokens,
+            cached_input_tokens,
+            cache_write_5m_tokens,
+            cache_write_1h_tokens,
+        };
+        Ok(self
+            .inner
+            .record_tiered(provider, model, &usage, tier, estimated))
     }
 
     /// Record a completed call and return the cost charged (None if unpriced).
@@ -411,13 +702,19 @@ impl PyCost {
     #[staticmethod]
     fn pricing_table<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
-        for row in PRICING {
+        for row in PRICING.iter().chain(crate::pricing_generated::GENERATED) {
+            let pricing = row.pricing.with_provider_tiers(row.provider);
             let d = PyDict::new(py);
             d.set_item("provider", row.provider)?;
             d.set_item("model", row.model)?;
-            d.set_item("input_per_million", row.pricing.input_per_million)?;
-            d.set_item("output_per_million", row.pricing.output_per_million)?;
-            d.set_item("long_context_threshold", row.pricing.long_context_threshold)?;
+            d.set_item("input_per_million", pricing.input_per_million)?;
+            d.set_item("output_per_million", pricing.output_per_million)?;
+            d.set_item("long_context_threshold", pricing.long_context_threshold)?;
+            d.set_item("cached_input_per_million", pricing.cached_input_per_million)?;
+            d.set_item("cache_write_5m_per_million", pricing.cache_write_5m_per_million)?;
+            d.set_item("cache_write_1h_per_million", pricing.cache_write_1h_per_million)?;
+            d.set_item("batch_multiplier", pricing.batch_multiplier)?;
+            d.set_item("fast_multiplier", pricing.fast_multiplier)?;
             list.append(d)?;
         }
         Ok(list)
@@ -527,6 +824,149 @@ mod tests {
             5.0 * (1000.0 * 0.15 + 200.0 * 0.60) / 1e6
         ));
         assert_eq!(l.per_model()[0].0, "openai:gpt-4o-mini");
+    }
+
+    #[test]
+    fn generated_rows_merge_with_hand_rows() {
+        let hand = [p("openai", "gpt-4o", Pricing::flat(2.50, 10.00))];
+        let generated = [
+            // Same model as a hand row: hand must win the tie.
+            p("openai", "gpt-4o", Pricing::flat(99.0, 99.0)),
+            // A model parry doesn't hand-maintain: filled from the sync.
+            p("google", "gemini-3-pro", Pricing::flat(2.00, 12.00)),
+            // Longer prefix than any hand row: the sync row wins.
+            p("openai", "gpt-4o-audio", Pricing::flat(40.0, 80.0)),
+        ];
+        // Hand wins the tie on gpt-4o.
+        assert_eq!(best_match("gpt-4o", &hand, &generated).unwrap().pricing.input_per_million, 2.50);
+        // Gap filled from the generated table.
+        assert_eq!(
+            best_match("gemini-3-pro", &hand, &generated).unwrap().pricing.input_per_million,
+            2.00
+        );
+        // Longer generated prefix beats the shorter hand prefix.
+        assert_eq!(
+            best_match("gpt-4o-audio-preview", &hand, &generated)
+                .unwrap()
+                .pricing
+                .input_per_million,
+            40.0
+        );
+        // No match anywhere.
+        assert!(best_match("no-such-model", &hand, &generated).is_none());
+    }
+
+    #[test]
+    fn provider_tiers_preserve_explicit_synced_rates() {
+        // A synced row carries exact LiteLLM rates; enrichment must not clobber
+        // them. 0.99 is deliberately not the derived 0.10x input, to prove it.
+        let pr = Pricing::full(
+            3.0, 15.0, None, 3.0, 15.0, Some(0.99), None, None, Some(0.40), None,
+        );
+        let enriched = pr.with_provider_tiers("anthropic");
+        assert_eq!(enriched.cached_input_per_million, Some(0.99)); // explicit kept
+        assert_eq!(enriched.batch_multiplier, Some(0.40)); // explicit kept (not 0.50)
+        assert_eq!(enriched.cache_write_5m_per_million, Some(3.0 * 1.25)); // gap filled
+        assert_eq!(enriched.fast_multiplier, Some(2.0)); // gap filled
+    }
+
+    #[test]
+    fn provider_tiers_are_derived() {
+        let oa = lookup_static("gpt-4o").unwrap();
+        assert_eq!(oa.cached_input_per_million, Some(0.25)); // 2.50 * 0.10
+        assert_eq!(oa.batch_multiplier, Some(0.50));
+        assert_eq!(oa.fast_multiplier, Some(1.75));
+        assert_eq!(oa.cache_write_5m_per_million, None); // OpenAI: auto-cached
+
+        let an = lookup_static("claude-sonnet-5-5").unwrap();
+        assert_eq!(an.cached_input_per_million, Some(0.20)); // 2.00 * 0.10
+        assert_eq!(an.cache_write_5m_per_million, Some(2.50)); // 2.00 * 1.25
+        assert_eq!(an.cache_write_1h_per_million, Some(4.00)); // 2.00 * 2.00
+        assert_eq!(an.fast_multiplier, Some(2.00));
+    }
+
+    #[test]
+    fn plain_cost_unchanged_by_tier_fields() {
+        let p = lookup_static("gpt-4o").unwrap();
+        assert!(close(p.cost(1000, 500), (1000.0 * 2.5 + 500.0 * 10.0) / 1e6));
+    }
+
+    #[test]
+    fn batch_tier_halves_cost_and_fast_raises_it() {
+        let l = Ledger::default();
+        let std = l.compute("gpt-4o", 1000, 500).unwrap();
+        let u = Usage {
+            input_tokens: 1000,
+            output_tokens: 500,
+            ..Usage::default()
+        };
+        assert!(close(l.compute_tiered("gpt-4o", &u, Tier::Batch).unwrap(), std * 0.50));
+        assert!(close(l.compute_tiered("gpt-4o", &u, Tier::Fast).unwrap(), std * 1.75));
+    }
+
+    #[test]
+    fn cache_read_is_cheaper_than_standard_input() {
+        let l = Ledger::default();
+        let cached = Usage {
+            cached_input_tokens: 1000,
+            ..Usage::default()
+        };
+        let standard = Usage {
+            input_tokens: 1000,
+            ..Usage::default()
+        };
+        let c = l
+            .compute_tiered("claude-sonnet-5-5", &cached, Tier::Standard)
+            .unwrap();
+        let s = l
+            .compute_tiered("claude-sonnet-5-5", &standard, Tier::Standard)
+            .unwrap();
+        assert!(close(c, s * 0.10));
+    }
+
+    #[test]
+    fn unknown_tier_rates_fall_back_to_standard_rate() {
+        // A custom override carries no tier rates, so cached tokens bill at the
+        // standard input rate and batch is a no-op (never silently free).
+        let l = Ledger::default();
+        l.set_pricing("my-model", Pricing::flat(3.0, 6.0));
+        let cached = Usage {
+            cached_input_tokens: 1_000_000,
+            ..Usage::default()
+        };
+        assert!(close(
+            l.compute_tiered("my-model", &cached, Tier::Standard).unwrap(),
+            3.0
+        ));
+        let io = Usage {
+            input_tokens: 1_000_000,
+            ..Usage::default()
+        };
+        assert!(close(
+            l.compute_tiered("my-model", &io, Tier::Batch).unwrap(),
+            3.0
+        ));
+    }
+
+    #[test]
+    fn record_tiered_bills_cache_and_folds_token_totals() {
+        let l = Ledger::default();
+        // 1000 standard + 500 cache-read input, 200 output on claude-sonnet-5-5.
+        let u = Usage {
+            input_tokens: 1000,
+            output_tokens: 200,
+            cached_input_tokens: 500,
+            ..Usage::default()
+        };
+        let cost = l
+            .record_tiered("anthropic", "claude-sonnet-5-5", &u, Tier::Standard, false)
+            .unwrap();
+        let expected = (1000.0 * 2.00 + 500.0 * 0.20 + 200.0 * 10.00) / 1e6;
+        assert!(close(cost, expected));
+        let t = l.totals();
+        assert_eq!(t.input_tokens, 1500); // cache tokens fold into the input total
+        assert_eq!(t.output_tokens, 200);
+        assert_eq!(t.requests, 1);
     }
 
     #[test]
