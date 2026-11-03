@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 
 mod cache;
 mod cost;
+mod pricing_generated;
 mod rate_limit;
 mod retry;
 mod tokenize;
