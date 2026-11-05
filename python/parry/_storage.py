@@ -46,6 +46,13 @@ class SpendSummary:
     cost_usd: float
 
 
+@dataclass(frozen=True)
+class LedgerHealth:
+    requests: int
+    estimated: int  # requests whose usage was estimated, not reported by the SDK
+    unpriced: int  # requests with no known price (cost_usd IS NULL)
+
+
 class SQLiteStore:
     def __init__(self, path: str | Path, *, max_entries: int = 100_000) -> None:
         self.path = str(path)
@@ -208,6 +215,22 @@ class SQLiteStore:
                 self._fail(exc)
                 return []
         return [(r[0], SpendSummary(int(r[1]), int(r[2]), int(r[3]), float(r[4]))) for r in rows]
+
+    def ledger_health(self, since: float | None = None) -> LedgerHealth | None:
+        with self._lock:
+            if self._conn is None:
+                return None
+            try:
+                row = self._conn.execute(
+                    "SELECT COUNT(*), COALESCE(SUM(estimated), 0),"
+                    " SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END)"
+                    " FROM ledger WHERE ts >= ?",
+                    (since or 0.0,),
+                ).fetchone()
+            except sqlite3.Error as exc:
+                self._fail(exc)
+                return None
+        return LedgerHealth(int(row[0]), int(row[1]), int(row[2] or 0))
 
     def close(self) -> None:
         with self._lock:
