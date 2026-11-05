@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from ._doctor import Report, diagnose_ledger
 from ._parry_native import Cost
 from ._storage import SQLiteStore, start_of_today
 
@@ -84,6 +85,27 @@ def _pricing(args: argparse.Namespace) -> int:
     return 0
 
 
+def _doctor(args: argparse.Namespace) -> int:
+    if not Path(args.db).exists():
+        print(f"parry: no database at {args.db}", file=sys.stderr)
+        return 1
+    store = SQLiteStore(args.db)
+    if not store.ok:
+        return 1
+    health = store.ledger_health()
+    by_model = store.spend_by_model()
+    store.close()
+    if health is None:
+        return 1
+    report = Report(diagnose_ledger(health, by_model))
+    if args.json:
+        print(json.dumps(report.as_dict(), indent=2))
+    else:
+        print(report.summary())
+    # Exit 2 when something is actionable, so the check can gate a pipeline.
+    return 2 if not report.ok else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="parry", description=__doc__.splitlines()[0] if __doc__ else None
@@ -98,8 +120,19 @@ def main(argv: list[str] | None = None) -> int:
     p_stats.add_argument("--json", action="store_true", help="machine-readable output")
     p_stats.set_defaults(func=_stats)
 
+    p_doctor = sub.add_parser(
+        "doctor", help="diagnose a parry SQLite ledger (estimated/unpriced costs, concentration)"
+    )
+    p_doctor.add_argument(
+        "--db", default="parry.db", help="path to the database (default: parry.db)"
+    )
+    p_doctor.add_argument("--json", action="store_true", help="machine-readable output")
+    p_doctor.set_defaults(func=_doctor)
+
     p_price = sub.add_parser("pricing", help="show the built-in pricing table")
-    p_price.add_argument("--provider", choices=["openai", "anthropic"])
+    p_price.add_argument(
+        "--provider", help="filter to one provider (e.g. openai, anthropic, google)"
+    )
     p_price.add_argument(
         "--tiers",
         action="store_true",
