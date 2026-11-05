@@ -8,6 +8,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -21,6 +22,7 @@ from ._adapters import (
     _get,
     decode_response,
     encode_response,
+    is_given,
     raw_mode,
     request_json,
 )
@@ -166,6 +168,91 @@ class AsyncCachedRawResponse(CachedRawResponse):
 
 _MISS = object()
 
+# How each provider carries its API key, for key rotation. Anything not listed
+# falls back to a bearer token, which is what every OpenAI-shaped SDK uses.
+_AUTH_HEADERS: dict[str, tuple[str, str]] = {
+    "openai": ("Authorization", "Bearer {key}"),
+    "anthropic": ("x-api-key", "{key}"),
+    "groq": ("Authorization", "Bearer {key}"),
+    "together": ("Authorization", "Bearer {key}"),
+    "mistral": ("Authorization", "Bearer {key}"),
+    "cohere": ("Authorization", "Bearer {key}"),
+    "google": ("x-goog-api-key", "{key}"),
+}
+_DEFAULT_AUTH_HEADER = ("Authorization", "Bearer {key}")
+_KEY_COOLDOWN_DEFAULT = 1.0  # seconds to rest a key after a 429 with no Retry-After
+
+
+def _is_rate_limit(exc: BaseException) -> bool:
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status == 429 or type(exc).__name__ == "RateLimitError"
+
+
+class _Keyring:
+    """A rotating pool of API keys for one provider.
+
+    ``next_key`` hands out keys round-robin, skipping any that are resting after
+    a rate-limit response, so load spreads across keys and a 429 on one key moves
+    traffic to the others. Thread-safe.
+    """
+
+    def __init__(self, provider: str, keys: list[str], header: tuple[str, str]) -> None:
+        self.provider = provider
+        self.keys = keys
+        self.header_name, self.header_template = header
+        self._i = 0
+        self._resting_until: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def next_key(self) -> str:
+        now = time.monotonic()
+        with self._lock:
+            n = len(self.keys)
+            best_key = self.keys[self._i % n]
+            best_until = float("inf")
+            for offset in range(n):
+                key = self.keys[(self._i + offset) % n]
+                until = self._resting_until.get(key, 0.0)
+                if until <= now:  # a ready key; take it and advance
+                    self._i = (self._i + offset + 1) % n
+                    return key
+                if until < best_until:  # remember the soonest-ready, as a fallback
+                    best_until, best_key = until, key
+            # Every key is resting; use the one that frees up soonest.
+            return best_key
+
+    def penalize(self, key: str, seconds: float | None) -> None:
+        rest = seconds if seconds and seconds > 0 else _KEY_COOLDOWN_DEFAULT
+        with self._lock:
+            self._resting_until[key] = time.monotonic() + rest
+
+    def header_for(self, key: str) -> tuple[str, str]:
+        return self.header_name, self.header_template.format(key=key)
+
+
+@dataclass(frozen=True)
+class CallEvent:
+    """What a guarded call did, handed to each registered observer once the call
+    is accounted for. Observers (e.g. the OpenTelemetry exporter) turn this into
+    a span or metric; parry itself never inspects it."""
+
+    provider: str
+    operation: str  # the adapter endpoint, e.g. "chat.completions"
+    request_model: str
+    response_model: str
+    tier: str
+    usage: UsageDetail
+    cost_usd: float
+    estimated: bool
+    cached: bool  # served from parry's cache (no provider call)
+    start_time_ns: int  # wall-clock, for a span's start/end
+    end_time_ns: int
+    max_tokens: int | None = None
+    response_id: str | None = None
+    saved_usd: float = 0.0  # cost avoided, on a cache hit
+
 
 class _Call:
     """Per-request state while a call moves through the guard."""
@@ -186,6 +273,7 @@ class _Call:
         "_json",
         "_json_done",
         "_prompt_tokens",
+        "_start_ns",
     )
 
     def __init__(
@@ -214,6 +302,7 @@ class _Call:
         self._json: str | None = None
         self._json_done = False
         self._prompt_tokens: int | None = None
+        self._start_ns = time.time_ns()  # wall-clock span start for observers
         self.key: str | None = None
         if guard.cache and self.mode != "stream" and adapter.cacheable_request(kwargs):
             payload = self.payload_json()
@@ -267,9 +356,58 @@ class _Call:
             return _MISS
         g._on_hit(tokens, cost)
         log.debug("parry: cache hit %s:%s", self.provider, self.model)
+        if g._observers:
+            g._emit(self._event(obj, UsageDetail(0, 0), 0.0, False, cached=True, saved=cost))
         if self.mode == "raw":
             return AsyncCachedRawResponse(obj) if self.async_raw_parse else CachedRawResponse(obj)
         return obj
+
+    def _max_tokens(self) -> int | None:
+        value = self.kwargs.get("max_tokens") or self.kwargs.get("max_completion_tokens")
+        return value if isinstance(value, int) else None
+
+    def apply_key(self) -> str | None:
+        """Inject the next rotating key's auth header for this attempt, if a key
+        pool is configured for the provider. Returns the key used (to penalize on
+        a 429). The header is a non-semantic field, so the cache key is unchanged
+        and a cached response is shared across keys."""
+        ring = self.guard._keyrings.get(self.provider)
+        if ring is None:
+            return None
+        key = ring.next_key()
+        name, value = ring.header_for(key)
+        headers = self.kwargs.get("extra_headers")
+        headers = dict(headers) if headers and is_given(headers) else {}
+        headers[name] = value
+        self.kwargs["extra_headers"] = headers
+        return key
+
+    def _event(
+        self,
+        response: Any,
+        detail: UsageDetail,
+        cost: float,
+        estimated: bool,
+        *,
+        cached: bool = False,
+        saved: float = 0.0,
+    ) -> CallEvent:
+        return CallEvent(
+            provider=self.provider,
+            operation=self.adapter.endpoint,
+            request_model=self.model,
+            response_model=str(_get(response, "model") or self.model),
+            tier=self.tier,
+            usage=detail,
+            cost_usd=cost,
+            estimated=estimated,
+            cached=cached,
+            start_time_ns=self._start_ns,
+            end_time_ns=time.time_ns(),
+            max_tokens=self._max_tokens(),
+            response_id=_get(response, "id"),
+            saved_usd=saved,
+        )
 
     # --- budget ------------------------------------------------------------
 
@@ -331,6 +469,8 @@ class _Call:
                 self.guard._store_entry(
                     self.key, encode_response(response), detail.total_tokens, cost
                 )
+            if self.guard._observers:
+                self.guard._emit(self._event(response, detail, cost, estimated))
         except Exception as exc:  # bookkeeping must never break the user's call
             log.warning("parry: bookkeeping failed for %s:%s (%s)", self.provider, self.model, exc)
 
@@ -348,10 +488,10 @@ class _Call:
             cost = self.guard._record_tiered(
                 self.provider, self.model, detail, self.tier, estimated
             )
-            if self.key is None:
-                return
-            final = acc.result()
-            if final is not None:
+            final = acc.result() if (self.guard._observers or self.key is not None) else None
+            if self.guard._observers:
+                self.guard._emit(self._event(final, detail, cost, estimated))
+            if self.key is not None and final is not None:
                 self.guard._store_entry(self.key, encode_response(final), detail.total_tokens, cost)
         except Exception as exc:
             log.warning(
@@ -416,6 +556,28 @@ class Parry:
         self._cost_saved = 0.0
         self._warned_unpriced: set[str] = set()
         self._context_tokens: list[Any] = []
+        self._observers: list[Callable[[CallEvent], None]] = []
+        self._keyrings: dict[str, _Keyring] = {}
+
+    # --- observers ---------------------------------------------------------
+
+    def add_observer(self, observer: Callable[[CallEvent], None]) -> Callable[[CallEvent], None]:
+        """Call ``observer(event)`` once per accounted call (including cache
+        hits). Used by the OpenTelemetry exporter; returns the observer so it can
+        be removed later. Observer errors are logged, never raised."""
+        self._observers.append(observer)
+        return observer
+
+    def remove_observer(self, observer: Callable[[CallEvent], None]) -> None:
+        with suppress(ValueError):
+            self._observers.remove(observer)
+
+    def _emit(self, event: CallEvent) -> None:
+        for observer in list(self._observers):
+            try:
+                observer(event)
+            except Exception as exc:  # an observer must never break a call
+                log.warning("parry: observer raised (%s)", exc)
 
     # --- configuration -----------------------------------------------------
 
@@ -449,6 +611,34 @@ class Parry:
         self._cost.set_pricing(model, input_per_million, output_per_million)
         self._warned_unpriced.discard(model)
         return self
+
+    def set_keys(
+        self, provider: str, keys: list[str], *, header: tuple[str, str] | None = None
+    ) -> Parry:
+        """Rotate across several API keys for ``provider``, one per request.
+
+        Provider rate limits are enforced per key (per org/project), so spreading
+        calls over N keys multiplies the effective limit. parry hands out keys
+        round-robin and, on a 429, rests the limited key for its ``Retry-After``
+        and sends the next attempt on a different key. The key is injected as a
+        request header (a non-semantic field), so caching is unaffected and
+        clients need no change.
+
+        ``header`` overrides how the key is carried, as ``(name, template)`` with
+        ``{key}`` in the template; the default is chosen from the provider
+        (bearer token for OpenAI-shaped SDKs, ``x-api-key`` for Anthropic).
+        """
+        if not keys:
+            raise ValueError("set_keys needs at least one key")
+        auth = header or _AUTH_HEADERS.get(provider, _DEFAULT_AUTH_HEADER)
+        if "{key}" not in auth[1]:
+            raise ValueError("header template must contain '{key}'")
+        self._keyrings[provider] = _Keyring(provider, list(keys), auth)
+        return self
+
+    def remove_keys(self, provider: str) -> bool:
+        """Stop rotating keys for ``provider``. Returns True if a pool was set."""
+        return self._keyrings.pop(provider, None) is not None
 
     def set_cache(self, backend: str = "memory", *, path: str | Path | None = None) -> Parry:
         """``"memory"`` (default) or ``"sqlite"`` with ``path=``. Redis is planned for a later release."""
@@ -577,6 +767,17 @@ class Parry:
             today_cost_usd=today,
             lifetime_cost_usd=lifetime,
         )
+
+    def doctor(self) -> Any:
+        """Diagnose this guard's current session and return a report.
+
+        Flags a low cache hit rate, estimated or unpriced costs, rate-limit
+        rejections and spend concentration, each with a one-line fix. Print
+        ``guard.doctor().summary()``.
+        """
+        from ._doctor import Report, diagnose_stats
+
+        return Report(diagnose_stats(self.stats))
 
     @property
     def is_intercepting(self) -> bool:
@@ -747,6 +948,16 @@ class Parry:
             raise RateLimited(provider, model, wait)
         return wait, waited_since
 
+    def _penalize_key(self, provider: str, key: str | None, exc: BaseException) -> None:
+        """On a 429, rest the key that was used so the next attempt rotates off it."""
+        if key is None:
+            return
+        ring = self._keyrings.get(provider)
+        if ring is None or not _is_rate_limit(exc):
+            return
+        _, retry_after = self._retry.classify(exc)
+        ring.penalize(key, retry_after)
+
     def _retry_delay(self, exc: BaseException, attempt: int) -> float | None:
         if not self.retry or isinstance(exc, ParryError) or not isinstance(exc, Exception):
             return None
@@ -795,10 +1006,12 @@ class Parry:
                 if wait <= 0:
                     break
                 time.sleep(wait)
+            key = call.apply_key()
             try:
                 result = original(resource, **kwargs)
                 break
             except Exception as exc:
+                self._penalize_key(call.provider, key, exc)
                 delay = self._retry_delay(exc, attempt)
                 if delay is None:
                     self._count("errors")
@@ -843,12 +1056,14 @@ class Parry:
                 if wait <= 0:
                     break
                 await asyncio.sleep(wait)
+            key = call.apply_key()
             try:
                 result = original(resource, **kwargs)
                 if inspect.isawaitable(result):
                     result = await result
                 break
             except Exception as exc:
+                self._penalize_key(call.provider, key, exc)
                 delay = self._retry_delay(exc, attempt)
                 if delay is None:
                     self._count("errors")

@@ -19,7 +19,7 @@ from ._core import AsyncCachedRawResponse, CachedRawResponse, Parry, ParryStats
 from ._errors import BudgetExceeded, ParryError, RateLimited, UnpricedModel
 from ._parry_native import Cache, Cost, RateLimit, Retry, count_tokens, estimate_tokens
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "AsyncCachedRawResponse",
@@ -36,6 +36,7 @@ __all__ = [
     "UnpricedModel",
     "bypass",
     "count_tokens",
+    "doctor",
     "estimate_tokens",
     "get_guard",
     "install",
@@ -140,6 +141,14 @@ def stats() -> ParryStats:
     """Stats of the active guard (an empty snapshot if nothing is installed)."""
     guard = get_guard()
     return guard.stats if guard is not None else ParryStats()
+
+
+def doctor() -> Any:
+    """Diagnose the active guard and return a report (see :meth:`Parry.doctor`)."""
+    from ._doctor import Report, diagnose_stats
+
+    guard = get_guard()
+    return guard.doctor() if guard is not None else Report(diagnose_stats(ParryStats()))
 
 
 def storage(path: str | Path) -> Parry:
