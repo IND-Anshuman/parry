@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "llm-parry"
-version = "0.2.0"
+version = "0.3.0"
 description = "Zero-config rate limiting, caching, and cost control for LLM calls."
 readme = "README.md"
 license = "MIT"
@@ -34,6 +34,8 @@ openai = ["openai>=1.40"]
 anthropic = ["anthropic>=0.40"]
 langchain = ["langchain-core>=0.3"]
 llamaindex = ["llama-index-core>=0.12"]
+otel = ["opentelemetry-sdk>=1.20"]
+litellm = ["litellm>=1.40"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
@@ -47,6 +49,7 @@ integrations = [
     "langchain-anthropic>=0.3",
     "llama-index-core>=0.12",
     "llama-index-llms-openai>=0.3",
+    "opentelemetry-sdk>=1.20",
 ]
 
 [project.scripts]

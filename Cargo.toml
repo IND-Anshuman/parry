@@ -1,6 +1,6 @@
 [package]
 name = "parry-native"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Rust core of parry: zero-config rate limiting, caching and cost control for LLM calls"
