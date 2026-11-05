@@ -162,6 +162,54 @@ agent.run_sync("What is a token bucket?")
 For a model backed by a provider parry doesn't hook, wrap the call with the
 building blocks shown below.
 
+## OpenTelemetry
+
+parry can emit one span per guarded call using the OpenTelemetry GenAI semantic
+conventions. You configure OpenTelemetry (provider + exporter); parry only emits
+spans. Install the SDK with `pip install "llm-parry[otel]"`, then:
+
+```python
+import parry
+from parry.integrations import otel
+
+parry.install()
+otel.instrument()          # spans now flow to your configured provider
+```
+
+Each accounted call (cache hits included) becomes a `CLIENT` span named
+`"{operation} {model}"` with `gen_ai.*` attributes — `gen_ai.request.model`,
+`gen_ai.response.model`, `gen_ai.usage.input_tokens` / `output_tokens`,
+`gen_ai.usage.cache_read.input_tokens` / `cache_creation.input_tokens` — plus
+`parry.*` extensions: `parry.cost.usd`, `parry.cost.estimated`,
+`parry.pricing.tier`, `parry.cache.hit` and `parry.cost.saved_usd` on a hit.
+
+`instrument()` returns a handle; call `handle.uninstrument()` to stop. Pass a
+specific `guard=` or `tracer=` if you don't want the process-wide ones. The
+underlying hook is `guard.add_observer(fn)`, which calls `fn(event)` with a
+`CallEvent` per call — use it directly to feed metrics or any other sink.
+
+## LiteLLM
+
+If you call models through LiteLLM, change one import and every call is guarded
+— cache, rate limiting, budget, cost tracking, retry and any OpenTelemetry
+export you've set up — while LiteLLM still makes the actual call and returns its
+usual `ModelResponse`:
+
+```python
+from parry_litellm import completion       # was: from litellm import completion
+
+completion(model="gpt-4o", messages=[{"role": "user", "content": "hi"}])
+completion(model="claude-sonnet-5-5", messages=[...])   # any model LiteLLM routes
+```
+
+`import parry_litellm as litellm` works too: any name the shim doesn't define
+proxies to the real `litellm`. The guard used is whatever `parry.install()` or a
+`with Parry():` block has active; with none installed the shim keeps its own
+default guard (set yours with `parry_litellm.configure(guard)`). The provider
+label for rate limiting and cost comes from LiteLLM's own routing, so a
+`set_rate_limit` / `set_pricing` keyed on that provider applies. Install the
+extra with `pip install "llm-parry[litellm]"`.
+
 ## Anything else
 
 If a library calls `client.chat.completions.create`, `client.responses.create`

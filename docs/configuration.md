@@ -85,6 +85,34 @@ each request.
 
 Cache hits never consume rate-limit capacity.
 
+## Multiple API keys
+
+Providers enforce their rate limits per key (per org or project), so spreading
+calls over several keys multiplies the effective limit. Give the guard a pool
+and it rotates one key per request:
+
+```python
+guard.set_keys("openai", [key_one, key_two, key_three])
+guard.set_keys("anthropic", [key_a, key_b])            # uses x-api-key
+guard.remove_keys("openai")                            # stop rotating
+```
+
+Keys are handed out round-robin. On a `429`, parry rests that key for its
+`Retry-After` and sends the retry on a different key. The key is injected as a
+request header — a non-semantic field — so the cache key is unchanged (a cached
+response is shared across keys) and your client needs no changes; the key it was
+constructed with is simply overridden per call.
+
+The header is chosen from the provider (bearer token for OpenAI-shaped SDKs,
+`x-api-key` for Anthropic). Override it for anything else:
+
+```python
+guard.set_keys("myprovider", [k1, k2], header=("X-Api-Key", "{key}"))
+```
+
+Rotation spreads load across keys; it does not raise parry's own limiter. If you
+also call `set_rate_limit`, set it to the combined capacity of all keys.
+
 ## Pricing
 
 The built-in table covers current OpenAI and Anthropic models (`parry pricing`

@@ -211,6 +211,8 @@ With no active guard, the hook calls the original method directly. See
 ## Links
 
 - Documentation: <https://www.anshumanbuilds.dev/parry/>
+- Migrating from LiteLLM / Helicone, and a comparison: [docs/migrating.md](docs/migrating.md)
+- Recipes (multi-tenant, FastAPI, agents, batch, fine-tunes): [docs/recipes.md](docs/recipes.md)
 - Source: <https://github.com/IND-Anshuman/parry>
 - Issues and pricing updates: <https://github.com/IND-Anshuman/parry/issues>
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
