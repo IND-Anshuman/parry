@@ -6,6 +6,51 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-05
+
+This release is about **production credibility**: export to your own telemetry,
+diagnose the guard, spread load over multiple keys, and drop into existing
+LiteLLM code — plus guides for migrating and common patterns.
+
+### Added
+
+- **OpenTelemetry GenAI exporter** (`parry.integrations.otel.instrument()`).
+  Emits one `CLIENT` span per accounted call — cache hits included — with
+  `gen_ai.*` usage and request/response attributes plus `parry.*` extensions
+  (cost, pricing tier, cache hit, saved cost). parry emits spans into your own
+  configured provider; it does not configure OpenTelemetry. Install with the
+  `parry[otel]` extra. Backed by a general `guard.add_observer(fn)` hook that
+  delivers a `CallEvent` per call for any sink (metrics, logs, custom).
+- `parry doctor` — a diagnostic that turns the guard's counters into
+  plain-language findings with a one-line fix each: low cache hit rate,
+  estimated or unpriced costs, rate-limit rejections and spend concentration.
+  Available as `guard.doctor()` / `parry.doctor()` on a live guard (returns a
+  `Report`), and as `parry doctor --db parry.db` over a persisted ledger (exit
+  code 2 when something is actionable, so it can gate a pipeline).
+- **Multi-key rotation** (`guard.set_keys(provider, keys)`). Rotates across
+  several API keys one per request to multiply per-org/per-project rate limits;
+  on a `429` it rests the limited key for its `Retry-After` and retries on
+  another. The key is injected as a request header (non-semantic), so caching is
+  unaffected and clients need no change. Defaults to a bearer token, `x-api-key`
+  for Anthropic; override with `header=(name, template)`. `remove_keys` stops it.
+- **LiteLLM shim** (`parry_litellm`). `from parry_litellm import completion`
+  (or `import parry_litellm as litellm`) guards every LiteLLM call — cache, rate
+  limiting, budget, cost, retry and OpenTelemetry — while LiteLLM still makes the
+  call and returns its `ModelResponse`. The provider label comes from LiteLLM's
+  routing; unknown attributes proxy to the real `litellm`. Uses the active guard,
+  or its own default (`parry_litellm.configure(...)`). Extra: `parry[litellm]`.
+- **Migration guides and recipes.** [docs/migrating.md](docs/migrating.md)
+  covers moving from LiteLLM and from Helicone (or any logging proxy) with a
+  comparison table and when parry is / isn't the right tool;
+  [docs/recipes.md](docs/recipes.md) adds copy-pasteable patterns for
+  multi-tenant SaaS, FastAPI, agent cost-runaway, OpenAI-compatible providers,
+  fine-tune pricing and large batch jobs.
+
+### Changed
+
+- `parry pricing --provider` now accepts any provider (not just openai /
+  anthropic), matching the providers added in 0.2.0.
+
 ## [0.2.0] - 2026-11-03
 
 This release is about **cost-model correctness** and **provider reach**: parry's

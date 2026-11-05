@@ -5,6 +5,29 @@ description: Release history for parry.
 
 import { Badge } from '@astrojs/starlight/components';
 
+## 0.3.0 <Badge text="2026-11-05" variant="tip" />
+
+Production credibility. See
+[CHANGELOG.md](https://github.com/IND-Anshuman/parry/blob/main/CHANGELOG.md) for
+the full list.
+
+**Observability**
+- OpenTelemetry GenAI exporter (`parry.integrations.otel.instrument()`): one span
+  per call with `gen_ai.*` usage/request attributes and `parry.*` extensions,
+  into your own provider. Backed by a general `guard.add_observer(fn)` hook.
+- `parry doctor`: plain-language findings (cache hit rate, estimated/unpriced
+  costs, rate-limit rejections, spend concentration) as `guard.doctor()` or
+  `parry doctor --db parry.db`.
+
+**Reach**
+- Multi-key rotation (`guard.set_keys(provider, keys)`): spread calls over
+  several keys to multiply per-org rate limits; rests a key on a `429`.
+- LiteLLM shim (`parry_litellm`): guard existing LiteLLM code with one import.
+
+**Docs**
+- Migration guides (LiteLLM, Helicone) with a comparison, and a recipe set
+  (multi-tenant, FastAPI, agents, batch, fine-tunes).
+
 ## 0.2.0 <Badge text="2026-11-03" variant="tip" />
 
 Cost-model correctness and provider reach. See
