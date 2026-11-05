@@ -72,6 +72,7 @@ _ALLOWED_MODULE_PREFIXES = (
     "ollama.",
     "mistralai.",
     "cohere.",
+    "litellm.",
 )
 _class_cache: dict[str, type] = {}
 
