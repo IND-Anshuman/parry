@@ -5,6 +5,28 @@ description: Release history for parry.
 
 import { Badge } from '@astrojs/starlight/components';
 
+## 0.4.0 <Badge text="2026-11-15" variant="tip" />
+
+Operating the guard in production. See
+[CHANGELOG.md](https://github.com/IND-Anshuman/parry/blob/main/CHANGELOG.md) for
+the full list.
+
+**Observability**
+- `parry stats --serve`: a local, read-only dashboard (spend, per-model totals,
+  the doctor's findings), standard-library only and bound to localhost. Serves
+  aggregates, never request or response content.
+
+**Reliability**
+- `parry.RetryQueue`: a background worker-pool queue that runs callables
+  off-thread and retries transient failures with backoff, without blocking the
+  caller. Returns a standard `concurrent.futures.Future` per `submit`; pair with
+  `Parry(retry=False)`.
+
+**Privacy**
+- PII redaction (`guard.set_redaction()`): a response or request matching a PII
+  pattern is cached in memory but never written to the SQLite store. Ships a
+  standalone `parry.Redactor`; parry never rewrites provider payloads.
+
 ## 0.3.0 <Badge text="2026-11-05" variant="tip" />
 
 Production credibility. See

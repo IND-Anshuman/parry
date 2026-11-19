@@ -6,6 +6,34 @@ uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-15
+
+This release is about **operating the guard in production**: see what it's doing
+through a local dashboard, run fire-and-forget work off-thread with backoff, and
+keep personal data out of the persistent cache.
+
+### Added
+
+- **PII redaction (keep PII off disk).** `guard.set_redaction()` keeps personal
+  data out of the persistent cache: a response — or request — that matches a PII
+  pattern is cached in memory for the process but never written to the SQLite
+  store. What is sent to the provider and returned to the caller is untouched;
+  `stats.pii_redacted` counts what was kept off disk. Ships a standalone
+  `parry.Redactor` (email, SSN, credit card, phone, IPv4, API-key defaults;
+  custom patterns; a `redact()` utility) — parry never rewrites provider
+  payloads itself.
+- `parry.RetryQueue` — a background worker-pool queue that runs callables
+  off-thread and retries transient failures with backoff, without blocking the
+  caller. Re-schedules a retry after its delay without tying up a worker, uses
+  the same `Retry` classifier as the inline guard, and returns a standard
+  `concurrent.futures.Future` per `submit`. For fire-and-forget and batch work;
+  pair with `Parry(retry=False)` so retries aren't doubled.
+- `parry stats --serve` — a local, read-only dashboard over a persisted ledger
+  (spend, per-model totals, and the doctor's findings), standard-library only
+  and bound to localhost by default. It serves aggregates, never request or
+  response content; `--host` / `--port` change where it listens. A developer
+  convenience alongside `parry stats` / `parry doctor`, not a hosted service.
+
 ## [0.3.0] - 2026-11-05
 
 This release is about **production credibility**: export to your own telemetry,
