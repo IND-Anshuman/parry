@@ -7,7 +7,7 @@ import inspect
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +28,7 @@ from ._adapters import (
 )
 from ._errors import BudgetExceeded, ParryError, RateLimited, UnpricedModel
 from ._parry_native import Cache, Cost, RateLimit, Retry, count_tokens, estimate_tokens
+from ._redact import Redactor
 from ._storage import SQLiteStore, start_of_today
 from ._stream import instrument_async_stream, instrument_stream
 
@@ -43,6 +44,7 @@ _COUNTERS = (
     "budget_rejections",
     "retries",
     "errors",
+    "pii_redacted",
 )
 
 
@@ -70,6 +72,7 @@ class ParryStats:
     budget_rejections: int = 0
     retries: int = 0
     errors: int = 0
+    pii_redacted: int = 0
     unpriced_requests: int = 0
     estimated_requests: int = 0
     by_model: dict[str, dict[str, Any]] = field(default_factory=dict)
@@ -111,6 +114,10 @@ class ParryStats:
         if self.unpriced_requests:
             lines.append(
                 f"unpriced        {self.unpriced_requests} requests (model not in pricing table)"
+            )
+        if self.pii_redacted:
+            lines.append(
+                f"pii             {self.pii_redacted} responses kept out of the persistent cache"
             )
         for model, t in self.by_model.items():
             lines.append(f"  {model:<40} {t['requests']:>6} req  {usd(t['cost_usd'])}")
@@ -466,9 +473,9 @@ class _Call:
                 self.provider, str(model), detail, self.tier, estimated
             )
             if self.key is not None and self.adapter.cacheable_response(response):
-                self.guard._store_entry(
-                    self.key, encode_response(response), detail.total_tokens, cost
-                )
+                blob = encode_response(response)
+                persist = not self.guard._pii_blocks_persist(self, blob)
+                self.guard._store_entry(self.key, blob, detail.total_tokens, cost, persist=persist)
             if self.guard._observers:
                 self.guard._emit(self._event(response, detail, cost, estimated))
         except Exception as exc:  # bookkeeping must never break the user's call
@@ -492,7 +499,9 @@ class _Call:
             if self.guard._observers:
                 self.guard._emit(self._event(final, detail, cost, estimated))
             if self.key is not None and final is not None:
-                self.guard._store_entry(self.key, encode_response(final), detail.total_tokens, cost)
+                blob = encode_response(final)
+                persist = not self.guard._pii_blocks_persist(self, blob)
+                self.guard._store_entry(self.key, blob, detail.total_tokens, cost, persist=persist)
         except Exception as exc:
             log.warning(
                 "parry: stream bookkeeping failed for %s:%s (%s)", self.provider, self.model, exc
@@ -558,6 +567,7 @@ class Parry:
         self._context_tokens: list[Any] = []
         self._observers: list[Callable[[CallEvent], None]] = []
         self._keyrings: dict[str, _Keyring] = {}
+        self._redactor: Redactor | None = None
 
     # --- observers ---------------------------------------------------------
 
@@ -639,6 +649,29 @@ class Parry:
     def remove_keys(self, provider: str) -> bool:
         """Stop rotating keys for ``provider``. Returns True if a pool was set."""
         return self._keyrings.pop(provider, None) is not None
+
+    def set_redaction(
+        self,
+        enabled: bool = True,
+        *,
+        redactor: Redactor | None = None,
+        patterns: Iterable[str] | None = None,
+        extra: Mapping[str, str] | None = None,
+    ) -> Parry:
+        """Keep PII out of the **persistent** cache.
+
+        When on, a response whose content — or whose request — matches a PII
+        pattern is cached in memory for this process but never written to the
+        SQLite store, so personal data is not persisted to disk. What is sent to
+        the provider and returned to the caller is untouched, and the in-memory
+        cache still serves the session. ``patterns`` / ``extra`` configure a
+        default :class:`~parry.Redactor`, or pass your own ``redactor``.
+        """
+        if not enabled:
+            self._redactor = None
+        else:
+            self._redactor = redactor or Redactor(patterns=patterns, extra=extra)
+        return self
 
     def set_cache(self, backend: str = "memory", *, path: str | Path | None = None) -> Parry:
         """``"memory"`` (default) or ``"sqlite"`` with ``path=``. Redis is planned for a later release."""
@@ -761,6 +794,7 @@ class Parry:
             budget_rejections=counts["budget_rejections"],
             retries=counts["retries"],
             errors=counts["errors"],
+            pii_redacted=counts["pii_redacted"],
             unpriced_requests=totals["unpriced_requests"],
             estimated_requests=totals["estimated_requests"],
             by_model={k: dict(v) for k, v in self._cost.by_model().items()},
@@ -922,10 +956,27 @@ class Parry:
         )
         return cost or 0.0
 
-    def _store_entry(self, key: str, blob: str, tokens: int, cost: float) -> None:
+    def _store_entry(
+        self, key: str, blob: str, tokens: int, cost: float, *, persist: bool = True
+    ) -> None:
         self._cache.set(key, blob, tokens, cost)
-        if self._store is not None:
+        if persist and self._store is not None:
             self._store.put(key, blob, tokens, cost, self.cache_ttl)
+
+    def _pii_blocks_persist(self, call: _Call, blob: str) -> bool:
+        """True when redaction is on and this entry (response or request) holds
+        PII, so it stays in the in-memory cache but is kept out of SQLite."""
+        redactor = self._redactor
+        if redactor is None or self._store is None:
+            return False
+        request = call.payload_json() or ""
+        if redactor.detect(blob) or (request and redactor.detect(request)):
+            self._count("pii_redacted")
+            log.debug(
+                "parry: PII detected; not persisting %s:%s to disk", call.provider, call.model
+            )
+            return True
+        return False
 
     def _rate_wait(self, call: _Call, waited_since: float | None) -> tuple[float, float | None]:
         return self._rate_wait_for(call.provider, call.model, call.tpm_tokens(), waited_since)
