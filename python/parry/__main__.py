@@ -21,6 +21,8 @@ def _stats(args: argparse.Namespace) -> int:
     if not Path(args.db).exists():
         print(f"parry: no database at {args.db}", file=sys.stderr)
         return 1
+    if getattr(args, "serve", False):
+        return _serve(args)
     store = SQLiteStore(args.db)
     if not store.ok:
         return 1
@@ -85,6 +87,22 @@ def _pricing(args: argparse.Namespace) -> int:
     return 0
 
 
+def _serve(args: argparse.Namespace) -> int:
+    from ._dashboard import serve
+
+    server = serve(args.db, args.host, args.port)
+    host, port = server.server_address[:2]
+    print(f"parry: serving {args.db} at http://{host}:{port}  (Ctrl-C to stop)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
+
+
 def _doctor(args: argparse.Namespace) -> int:
     if not Path(args.db).exists():
         print(f"parry: no database at {args.db}", file=sys.stderr)
@@ -118,6 +136,11 @@ def main(argv: list[str] | None = None) -> int:
         "--db", default="parry.db", help="path to the database (default: parry.db)"
     )
     p_stats.add_argument("--json", action="store_true", help="machine-readable output")
+    p_stats.add_argument(
+        "--serve", action="store_true", help="serve a local read-only dashboard instead of printing"
+    )
+    p_stats.add_argument("--host", default="127.0.0.1", help="dashboard host (default: 127.0.0.1)")
+    p_stats.add_argument("--port", type=int, default=8787, help="dashboard port (default: 8787)")
     p_stats.set_defaults(func=_stats)
 
     p_doctor = sub.add_parser(
