@@ -210,6 +210,43 @@ s.unpriced_requests, s.estimated_requests, s.today_cost_usd, s.lifetime_cost_usd
 print(s.summary())
 ```
 
+For a persisted ledger, `parry doctor --db parry.db` prints plain-language
+findings, and `parry stats --serve --db parry.db` opens a small read-only
+dashboard (spend, per-model totals, the doctor's findings) at
+`http://127.0.0.1:8787`. It uses only the standard library, binds to localhost,
+and serves aggregates only — never request or response content. It's a local
+developer view, not a hosted service; set `--host` / `--port` to change where it
+listens.
+
+## Keeping PII off disk
+
+parry's persistent cache (`storage=...`) writes response bodies to the SQLite
+file. Turn on redaction and any response — or request — that matches a PII
+pattern is cached **in memory for the process but never written to disk**, so
+personal data isn't persisted:
+
+```python
+guard.set_redaction()                                  # default detectors
+guard.set_redaction(patterns=["email", "ssn"])         # only these
+guard.set_redaction(extra={"account": r"ACCT-\d+"})    # add your own
+guard.set_redaction(False)                             # off
+```
+
+Defaults detect email, SSN, credit card, phone, IPv4 and `sk-/pk-/rk-` keys.
+Patterns are intentionally broad — a false positive only means "don't persist",
+the safe direction. What is sent to the provider and returned to the caller is
+untouched; the in-memory cache still serves the session; `stats.pii_redacted`
+counts the responses kept off disk. (With no `storage`, nothing is persisted
+anyway, so there is nothing to redact.)
+
+The `Redactor` is also a standalone utility if you want to scrub text yourself —
+parry never rewrites provider payloads for you:
+
+```python
+from parry import Redactor
+clean, hits = Redactor().redact("ping me at a@b.com")   # ("ping me at [REDACTED:email]", 1)
+```
+
 ## Logging
 
 parry logs to the `parry` logger. At `DEBUG` it logs one line per call with

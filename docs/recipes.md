@@ -143,6 +143,27 @@ from parry import Cost
 Cost().compute_tiered("gpt-4o", input_tokens=1_000_000, output_tokens=200_000, tier="batch")
 ```
 
+## Fire-and-forget with background retries
+
+When you don't need the result inline — enrichment, embeddings indexing, offline
+jobs — a `RetryQueue` runs each call on a worker pool and retries transient
+failures off-thread (same classifier as the guard), without blocking you. A
+backoff doesn't tie up a worker; the job is re-scheduled after the delay.
+
+```python
+from parry import RetryQueue
+
+with RetryQueue(workers=8, max_attempts=5) as q:
+    futures = [q.submit(enrich, row) for row in rows]   # returns at once
+    # ... do other work ...
+# close() (via the context manager) waits for every job and its retries
+results = [f.result() for f in futures]
+print(q.stats)   # submitted / succeeded / failed / retried / pending
+```
+
+Let one layer own the retries: if you submit a guarded SDK call, build the guard
+with `Parry(retry=False)` so the queue and the guard don't both back off.
+
 ## Audit what happened
 
 ```python
