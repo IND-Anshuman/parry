@@ -18,8 +18,10 @@ from . import _patch, _state
 from ._core import AsyncCachedRawResponse, CachedRawResponse, Parry, ParryStats
 from ._errors import BudgetExceeded, ParryError, RateLimited, UnpricedModel
 from ._parry_native import Cache, Cost, RateLimit, Retry, count_tokens, estimate_tokens
+from ._queue import RetryQueue
+from ._redact import Redactor
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "AsyncCachedRawResponse",
@@ -32,7 +34,9 @@ __all__ = [
     "ParryStats",
     "RateLimit",
     "RateLimited",
+    "Redactor",
     "Retry",
+    "RetryQueue",
     "UnpricedModel",
     "bypass",
     "count_tokens",
